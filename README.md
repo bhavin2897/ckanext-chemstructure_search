@@ -1,4 +1,3 @@
-[![Tests](https://github.com/TIB Hannover/ckanext-chemstructure_search/workflows/Tests/badge.svg?branch=main)](https://github.com/TIB Hannover/ckanext-chemstructure_search/actions)
 
 # ckanext-chemstructure_search
 
@@ -49,7 +48,7 @@ To install ckanext-chemstructure_search:
 
 2. Clone the source and install it on the virtualenv
 
-    `git clone https://github.com/TIB Hannover/ckanext-chemstructure_search.git` 
+    `git clone ` 
      `cd ckanext-chemstructure_search`
     `pip install -e .`
 	`pip install -r requirements.txt`
