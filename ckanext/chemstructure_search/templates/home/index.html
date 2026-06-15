@@ -1,0 +1,7 @@
+{% ckan_extends %}
+
+{% block promoted %}
+  {{ super() }}
+
+  {% snippet 'chemstructure_search/snippets/home_structure_search.html' %}
+{% endblock %}

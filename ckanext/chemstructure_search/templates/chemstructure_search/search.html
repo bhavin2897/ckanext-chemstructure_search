@@ -1,0 +1,174 @@
+{% extends "page.html" %}
+
+{% block subtitle %}Structure Search{% endblock %}
+
+{% block primary_content %}
+  <article class="module chemstructure-search-page">
+    <div class="module-content">
+
+      <div class="chemstructure-header">
+        <h1>Structure Search</h1>
+        <p class="text-muted">
+          Draw, paste, or generate a molecular query and search matching molecule packages.
+        </p>
+      </div>
+
+      <div class="chemstructure-card">
+        <div class="chemstructure-card-header">
+          <h2>Molecule query</h2>
+          <p>
+            Ketcher Prototype
+          </p>
+        </div>
+
+        <div class="form-group">
+          <label for="chemstructure-mode">Search mode</label>
+          <select id="chemstructure-mode" class="form-control">
+            <option value="exact">Exact structure match</option>
+            <option value="smarts">SMARTS / substructure match</option>
+            <option value="similarity">Fingerprint similarity search</option>
+          </select>
+        </div>
+
+        <div class="form-group">
+          <label>Ketcher editor</label>
+
+          <iframe
+            id="ketcher-frame"
+            src="{{ h.url_for_static('/chemstructure_search/ketcher/index.html') }}"
+            class="chemstructure-ketcher-frame">
+          </iframe>
+        </div>
+
+        <div class="form-group">
+          <label for="chemstructure-smiles">SMILES / SMARTS query</label>
+          <input
+            id="chemstructure-smiles"
+            class="form-control"
+            type="text"
+            placeholder="SMILES or SMARTS will appear here">
+        </div>
+
+        <div class="chemstructure-actions">
+          <button id="chemstructure-get-smiles" class="btn btn-default">
+            Get SMILES from Ketcher
+          </button>
+
+          <button id="chemstructure-search" class="btn btn-primary">
+            Search molecules
+          </button>
+        </div>
+
+        <div id="chemstructure-message" class="chemstructure-message"></div>
+      </div>
+
+      <div class="chemstructure-card chemstructure-results-card">
+        <div class="chemstructure-card-header">
+          <h2>Matching molecule(s)</h2>
+        </div>
+
+        <table class="table table-striped table-bordered" id="chemstructure-results-table" style="display:none;">
+        <thead>
+          <tr>
+            <th>Molecule</th>
+            <th>Title</th>
+            <th>Canonical SMILES</th>
+          </tr>
+        </thead>
+        <tbody id="chemstructure-results-body"></tbody>
+        </table>
+
+        <div id="chemstructure-empty-state" class="chemstructure-empty-state">
+          No search has been executed yet.
+        </div>
+      </div>
+
+    </div>
+  </article>
+
+  <style>
+    .chemstructure-search-page .module-content {
+      max-width: 1100px;
+      margin: 0 auto;
+    }
+
+    .chemstructure-header {
+      margin-bottom: 24px;
+    }
+
+    .chemstructure-header h1 {
+      margin-bottom: 8px;
+      font-size: 32px;
+      font-weight: 700;
+    }
+
+    .chemstructure-card {
+      background: #fff;
+      border: 1px solid #ddd;
+      border-radius: 6px;
+      padding: 20px;
+      margin-bottom: 24px;
+      box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+    }
+
+    .chemstructure-card-header {
+      margin-bottom: 18px;
+    }
+
+    .chemstructure-card-header h2 {
+      margin-top: 0;
+      margin-bottom: 6px;
+      font-size: 22px;
+      font-weight: 700;
+    }
+
+    .chemstructure-card-header p {
+      margin-bottom: 0;
+      color: #666;
+    }
+
+    .chemstructure-ketcher-frame {
+      width: 100%;
+      height: 430px;
+      border: 1px solid #ccc;
+      border-radius: 4px;
+      background: #fafafa;
+    }
+
+    .chemstructure-actions {
+      display: flex;
+      gap: 10px;
+      margin-top: 12px;
+      margin-bottom: 12px;
+    }
+
+    .chemstructure-message {
+      margin-top: 12px;
+    }
+
+    .chemstructure-results-card {
+      margin-top: 18px;
+    }
+
+    .chemstructure-empty-state {
+      padding: 24px;
+      border: 1px dashed #ccc;
+      border-radius: 4px;
+      color: #777;
+      background: #fafafa;
+      text-align: center;
+    }
+
+    #chemstructure-results-table td {
+      vertical-align: top;
+    }
+
+    #chemstructure-results-table td:last-child {
+      word-break: break-all;
+      font-family: monospace;
+      font-size: 12px;
+    }
+  </style>
+
+  <script src="{{ h.url_for_static('/chemstructure_search/structure_search.js') }}"></script>
+{% endblock %}

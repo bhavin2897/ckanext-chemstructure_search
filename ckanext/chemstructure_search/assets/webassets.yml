@@ -1,0 +1,14 @@
+# chemstructure_search-js:
+#   filter: rjsmin
+#   output: ckanext-chemstructure_search/%(version)s-chemstructure_search.js
+#   contents:
+#     - js/chemstructure_search.js
+#   extra:
+#     preload:
+#       - base/main
+
+# chemstructure_search-css:
+#   filter: cssrewrite
+#   output: ckanext-chemstructure_search/%(version)s-chemstructure_search.css
+#   contents:
+#     - css/chemstructure_search.css
