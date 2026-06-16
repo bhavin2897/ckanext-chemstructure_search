@@ -32,7 +32,7 @@
     if (emptyState) {
       emptyState.style.display = "block";
       emptyState.innerHTML = searching
-        ? "Searching molecule packages..."
+        ? "Searching molecules..."
         : "No search has been executed yet.";
     }
   }
@@ -182,7 +182,7 @@
       return;
     }
 
-    showMessage("Searching molecule packages...", "info");
+    showMessage("Searching molecule ...", "info");
 
     try {
       var response = await fetch("/api/3/action/chemstructure_rdkit_search", {
@@ -211,7 +211,7 @@
       renderResults(result.results || []);
 
       showMessage(
-        "Found " + (result.count || 0) + " matching molecule package(s).",
+        "Found " + (result.count || 0) + " matching molecule(s).",
         "success"
       );
     } catch (err) {
