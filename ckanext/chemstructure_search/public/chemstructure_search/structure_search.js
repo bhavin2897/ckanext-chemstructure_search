@@ -1,4 +1,7 @@
 (function () {
+  var chemstructureAutoSyncTimer = null;
+  var chemstructureLastSmiles = "";
+
   function showMessage(message, type) {
     var el = document.getElementById("chemstructure-message");
 
@@ -9,11 +12,11 @@
 
     el.innerHTML =
       '<div class="alert alert-' + (type || "info") + '">' +
-      message +
+      escapeHtml(message) +
       "</div>";
   }
 
-  function clearResults() {
+  function clearResults(searching) {
     var table = document.getElementById("chemstructure-results-table");
     var body = document.getElementById("chemstructure-results-body");
     var emptyState = document.getElementById("chemstructure-empty-state");
@@ -28,7 +31,9 @@
 
     if (emptyState) {
       emptyState.style.display = "block";
-      emptyState.innerHTML = "Searching molecule packages...";
+      emptyState.innerHTML = searching
+        ? "Searching molecule packages..."
+        : "No search has been executed yet.";
     }
   }
 
@@ -52,23 +57,23 @@
     }
 
     results.forEach(function (item) {
-    var row = document.createElement("tr");
+      var row = document.createElement("tr");
 
-    var moleculeId = item.id || item.name || "";
-    var moleculeName = item.name || item.id || "";
-    var moleculeUrl = "/molecule/" + encodeURIComponent(moleculeId);
+      var moleculeId = item.id || item.name || "";
+      var moleculeName = item.name || item.id || "";
+      var moleculeUrl = "/molecule/" + encodeURIComponent(moleculeId);
 
-    row.innerHTML =
-      '<td>' +
-        '<a href="' + moleculeUrl + '" target="_blank" rel="noopener noreferrer">' +
-          '<strong>' + escapeHtml(moleculeName) + '</strong>' +
-        '</a>' +
-      '</td>' +
-      '<td>' + escapeHtml(item.title || "") + '</td>' +
-      '<td>' + escapeHtml(item.canonical_smiles || "") + '</td>';
+      row.innerHTML =
+        "<td>" +
+          '<a href="' + moleculeUrl + '" target="_blank" rel="noopener noreferrer">' +
+            "<strong>" + escapeHtml(moleculeName) + "</strong>" +
+          "</a>" +
+        "</td>" +
+        "<td>" + escapeHtml(item.title || "") + "</td>" +
+        "<td>" + escapeHtml(item.canonical_smiles || "") + "</td>";
 
-    body.appendChild(row);
-  });
+      body.appendChild(row);
+    });
 
     emptyState.style.display = "none";
     table.style.display = "table";
@@ -83,33 +88,68 @@
       .replace(/'/g, "&#039;");
   }
 
-  async function getSmilesFromKetcher() {
+  async function getSmilesFromKetcherSilently() {
     var iframe = document.getElementById("ketcher-frame");
 
-    if (!iframe || !iframe.contentWindow || !iframe.contentWindow.ketcher) {
-      showMessage("Ketcher is not ready yet. Please try again after the editor has loaded.", "warning");
-      return;
+    if (!iframe) {
+      return null;
+    }
+
+    if (!iframe.contentWindow || !iframe.contentWindow.ketcher) {
+      return null;
     }
 
     try {
       var smiles = await iframe.contentWindow.ketcher.getSmiles();
-      var input = document.getElementById("chemstructure-smiles");
 
-      if (!input) {
-        showMessage("SMILES input field was not found.", "danger");
-        return;
+      if (!smiles || !smiles.trim()) {
+        return null;
       }
 
-      input.value = smiles;
-      showMessage("SMILES exported from Ketcher.", "success");
+      return smiles.trim();
     } catch (err) {
-      console.error("Could not export SMILES from Ketcher:", err);
-      showMessage("Could not export SMILES from Ketcher.", "danger");
+      console.warn("CHEMSTRUCTURE: Could not read SMILES from Ketcher:", err);
+      return null;
     }
   }
 
+  async function syncSmilesFromKetcher() {
+    var input = document.getElementById("chemstructure-smiles");
+
+    if (!input) {
+      return null;
+    }
+
+    var smiles = await getSmilesFromKetcherSilently();
+
+    if (!smiles) {
+      return null;
+    }
+
+    if (smiles === chemstructureLastSmiles) {
+      return smiles;
+    }
+
+    chemstructureLastSmiles = smiles;
+    input.value = smiles;
+
+    console.log("CHEMSTRUCTURE: SMILES auto-updated:", smiles);
+
+    return smiles;
+  }
+
+  function startKetcherAutoSync() {
+    window.clearInterval(chemstructureAutoSyncTimer);
+
+    chemstructureAutoSyncTimer = window.setInterval(function () {
+      syncSmilesFromKetcher();
+    }, 700);
+
+    console.log("CHEMSTRUCTURE: Ketcher auto-sync started");
+  }
+
   async function runSearch(modeOverride) {
-    clearResults();
+    clearResults(true);
 
     var input = document.getElementById("chemstructure-smiles");
     var modeSelect = document.getElementById("chemstructure-mode");
@@ -119,11 +159,25 @@
       return;
     }
 
-    var smiles = input.value.trim();
-    var mode = modeOverride || (modeSelect ? modeSelect.value : "similarity");
+    /*
+     * Before running the search, always fetch the latest structure from Ketcher.
+     * This keeps the search query in sync even if the auto-sync interval has not run yet.
+     */
+    var smilesFromKetcher = await getSmilesFromKetcherSilently();
 
-    if (!smiles) {
-      showMessage("Please provide a SMILES or SMARTS query first.", "warning");
+    if (smilesFromKetcher) {
+      input.value = smilesFromKetcher;
+      chemstructureLastSmiles = smilesFromKetcher;
+    }
+
+    var mode = modeOverride || (modeSelect ? modeSelect.value : "similarity");
+    var query = input.value.trim();
+
+    if (!query) {
+      showMessage(
+        "Please draw a structure in Ketcher or paste a SMILES/SMARTS query first.",
+        "warning"
+      );
       renderResults([]);
       return;
     }
@@ -137,7 +191,7 @@
           "Content-Type": "application/json"
         },
         body: JSON.stringify({
-          query: smiles,
+          query: query,
           mode: mode,
           threshold: 0.7,
           rows: 50
@@ -157,7 +211,7 @@
       renderResults(result.results || []);
 
       showMessage(
-        "Found " + (result.count || 0) + " matching molecule(s).",
+        "Found " + (result.count || 0) + " matching molecule package(s).",
         "success"
       );
     } catch (err) {
@@ -167,64 +221,90 @@
     }
   }
 
+  function clearSearchUi() {
+    var input = document.getElementById("chemstructure-smiles");
+    var table = document.getElementById("chemstructure-results-table");
+    var body = document.getElementById("chemstructure-results-body");
+    var emptyState = document.getElementById("chemstructure-empty-state");
+    var message = document.getElementById("chemstructure-message");
+
+    if (input) {
+      input.value = "";
+    }
+
+    chemstructureLastSmiles = "";
+
+    if (body) {
+      body.innerHTML = "";
+    }
+
+    if (table) {
+      table.style.display = "none";
+    }
+
+    if (emptyState) {
+      emptyState.style.display = "block";
+      emptyState.innerHTML = "No search has been executed yet.";
+    }
+
+    if (message) {
+      message.innerHTML = "";
+    }
+  }
+
   document.addEventListener("DOMContentLoaded", function () {
-  var getSmilesBtn = document.getElementById("chemstructure-get-smiles");
-  var similarityBtn = document.getElementById("chemstructure-search-similarity");
-  var exactBtn = document.getElementById("chemstructure-search-exact");
-  var clearBtn = document.getElementById("chemstructure-clear");
+    var similarityBtn = document.getElementById("chemstructure-search-similarity");
+    var exactBtn = document.getElementById("chemstructure-search-exact");
+    var selectedModeBtn = document.getElementById("chemstructure-search");
+    var clearBtn = document.getElementById("chemstructure-clear");
 
-  if (getSmilesBtn) {
-    getSmilesBtn.addEventListener("click", function (event) {
-      event.preventDefault();
-      getSmilesFromKetcher();
-    });
-  }
+    if (similarityBtn) {
+      similarityBtn.addEventListener("click", function (event) {
+        event.preventDefault();
+        runSearch("similarity");
+      });
+    }
 
-  if (similarityBtn) {
-    similarityBtn.addEventListener("click", function (event) {
-      event.preventDefault();
-      runSearch("similarity");
-    });
-  }
+    if (exactBtn) {
+      exactBtn.addEventListener("click", function (event) {
+        event.preventDefault();
+        runSearch("exact");
+      });
+    }
 
-  if (exactBtn) {
-    exactBtn.addEventListener("click", function (event) {
-      event.preventDefault();
-      runSearch("exact");
-    });
-  }
+    /*
+     * Optional support for the old full-page button:
+     * <button id="chemstructure-search">Search molecules</button>
+     */
+    if (selectedModeBtn) {
+      selectedModeBtn.addEventListener("click", function (event) {
+        event.preventDefault();
+        runSearch();
+      });
+    }
 
-  if (clearBtn) {
-    clearBtn.addEventListener("click", function (event) {
-      event.preventDefault();
+    if (clearBtn) {
+      clearBtn.addEventListener("click", function (event) {
+        event.preventDefault();
+        clearSearchUi();
+      });
+    }
 
-      var input = document.getElementById("chemstructure-smiles");
-      var table = document.getElementById("chemstructure-results-table");
-      var body = document.getElementById("chemstructure-results-body");
-      var emptyState = document.getElementById("chemstructure-empty-state");
-      var message = document.getElementById("chemstructure-message");
+    /*
+     * Start auto-sync when the homepage modal is opened.
+     * This is important because Ketcher may not be ready when the page first loads.
+     */
+    var modal = document.getElementById("chemstructure-home-modal");
 
-      if (input) {
-        input.value = "";
-      }
+    if (modal && window.jQuery) {
+      window.jQuery(modal).on("shown.bs.modal", function () {
+        startKetcherAutoSync();
+      });
+    }
 
-      if (body) {
-        body.innerHTML = "";
-      }
-
-      if (table) {
-        table.style.display = "none";
-      }
-
-      if (emptyState) {
-        emptyState.style.display = "block";
-        emptyState.innerHTML = "No search has been executed yet.";
-      }
-
-      if (message) {
-        message.innerHTML = "";
-      }
-    });
-  }
-});
+    /*
+     * Fallback for the full-page mode where there is no modal.
+     */
+    startKetcherAutoSync();
+  });
 })();
