@@ -2,7 +2,7 @@
 
 {% block subtitle %}Structure Search{% endblock %}
 
-{% block primary_content %}
+{% block primary %}
   <article class="module chemstructure-search-page">
     <div class="module-content">
 
@@ -171,4 +171,7 @@
   </style>
 
   <script src="{{ h.url_for_static('/chemstructure_search/structure_search.js') }}"></script>
+{% endblock %}
+
+{% block secondary %}
 {% endblock %}

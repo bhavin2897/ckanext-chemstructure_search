@@ -52,23 +52,23 @@
     }
 
     results.forEach(function (item) {
-      var row = document.createElement("tr");
+    var row = document.createElement("tr");
 
-      var moleculeId = item.id || item.name || "";
-      var moleculeName = item.name || item.id || "";
-      var moleculeUrl = "/molecule/" + encodeURIComponent(moleculeId);
+    var moleculeId = item.id || item.name || "";
+    var moleculeName = item.name || item.id || "";
+    var moleculeUrl = "/molecule/" + encodeURIComponent(moleculeId);
 
-      row.innerHTML =
-        '<td>' +
-          '<a href="' + moleculeUrl + '" target="_blank" rel="noopener noreferrer">' +
-            '<strong>' + escapeHtml(moleculeName) + '</strong>' +
-          '</a>' +
-        '</td>' +
-        '<td>' + escapeHtml(item.title || "") + '</td>' +
-        '<td>' + escapeHtml(item.canonical_smiles || "") + '</td>';
+    row.innerHTML =
+      '<td>' +
+        '<a href="' + moleculeUrl + '" target="_blank" rel="noopener noreferrer">' +
+          '<strong>' + escapeHtml(moleculeName) + '</strong>' +
+        '</a>' +
+      '</td>' +
+      '<td>' + escapeHtml(item.title || "") + '</td>' +
+      '<td>' + escapeHtml(item.canonical_smiles || "") + '</td>';
 
-      body.appendChild(row);
-    });
+    body.appendChild(row);
+  });
 
     emptyState.style.display = "none";
     table.style.display = "table";
@@ -108,7 +108,7 @@
     }
   }
 
-  async function runSearch() {
+  async function runSearch(modeOverride) {
     clearResults();
 
     var input = document.getElementById("chemstructure-smiles");
@@ -120,7 +120,7 @@
     }
 
     var smiles = input.value.trim();
-    var mode = modeSelect ? modeSelect.value : "exact";
+    var mode = modeOverride || (modeSelect ? modeSelect.value : "similarity");
 
     if (!smiles) {
       showMessage("Please provide a SMILES or SMARTS query first.", "warning");
@@ -168,21 +168,63 @@
   }
 
   document.addEventListener("DOMContentLoaded", function () {
-    var getSmilesBtn = document.getElementById("chemstructure-get-smiles");
-    var searchBtn = document.getElementById("chemstructure-search");
+  var getSmilesBtn = document.getElementById("chemstructure-get-smiles");
+  var similarityBtn = document.getElementById("chemstructure-search-similarity");
+  var exactBtn = document.getElementById("chemstructure-search-exact");
+  var clearBtn = document.getElementById("chemstructure-clear");
 
-    if (getSmilesBtn) {
-      getSmilesBtn.addEventListener("click", function (event) {
-        event.preventDefault();
-        getSmilesFromKetcher();
-      });
-    }
+  if (getSmilesBtn) {
+    getSmilesBtn.addEventListener("click", function (event) {
+      event.preventDefault();
+      getSmilesFromKetcher();
+    });
+  }
 
-    if (searchBtn) {
-      searchBtn.addEventListener("click", function (event) {
-        event.preventDefault();
-        runSearch();
-      });
-    }
-  });
+  if (similarityBtn) {
+    similarityBtn.addEventListener("click", function (event) {
+      event.preventDefault();
+      runSearch("similarity");
+    });
+  }
+
+  if (exactBtn) {
+    exactBtn.addEventListener("click", function (event) {
+      event.preventDefault();
+      runSearch("exact");
+    });
+  }
+
+  if (clearBtn) {
+    clearBtn.addEventListener("click", function (event) {
+      event.preventDefault();
+
+      var input = document.getElementById("chemstructure-smiles");
+      var table = document.getElementById("chemstructure-results-table");
+      var body = document.getElementById("chemstructure-results-body");
+      var emptyState = document.getElementById("chemstructure-empty-state");
+      var message = document.getElementById("chemstructure-message");
+
+      if (input) {
+        input.value = "";
+      }
+
+      if (body) {
+        body.innerHTML = "";
+      }
+
+      if (table) {
+        table.style.display = "none";
+      }
+
+      if (emptyState) {
+        emptyState.style.display = "block";
+        emptyState.innerHTML = "No search has been executed yet.";
+      }
+
+      if (message) {
+        message.innerHTML = "";
+      }
+    });
+  }
+});
 })();
