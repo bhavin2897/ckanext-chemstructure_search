@@ -280,7 +280,8 @@ def chemstructure_rdkit_search(context, data_dict):
 
     query = data_dict.get("query") or data_dict.get("smiles")
     mode = data_dict.get("mode", "similarity")
-    threshold = float(data_dict.get("threshold", 0.7))
+    threshold = float(data_dict.get("threshold", 0.25)) # increase similarity here. 25% similarity now
+    threshold = max(0.0, min(threshold, 1.0)) # clamp for exact
     rows_limit = int(data_dict.get("rows", 50))
 
     if not query:
@@ -338,6 +339,11 @@ def chemstructure_rdkit_search(context, data_dict):
             candidate_fp = _make_morgan_fp(mol)
             similarity = DataStructs.TanimotoSimilarity(query_fp, candidate_fp)
             matched = similarity >= threshold
+
+        if mode == "similarity":
+            hits.sort(key=lambda x: x.get("similarity", 0), reverse=True)
+        else:
+            hits.sort(key=lambda x: x.get("name") or "")
 
         if matched:
             result = {

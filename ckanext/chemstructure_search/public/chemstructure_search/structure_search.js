@@ -193,7 +193,7 @@
         body: JSON.stringify({
           query: query,
           mode: mode,
-          threshold: 0.7,
+          threshold: 0.25,
           rows: 50
         })
       });
