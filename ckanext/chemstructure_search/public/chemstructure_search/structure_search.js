@@ -156,9 +156,21 @@
   return selected ? selected.value : "similarity";
   }
 
-  async function runSearch(modeOverride) {
-    clearResults(true);
+   function redirectToMoleculeStructureSearch(query, mode) {
+    var params = new URLSearchParams();
 
+    params.set("structure_query", query);
+    params.set("structure_mode", mode);
+    params.set("sort", "title_string asc");
+
+    if (mode === "similarity") {
+      params.set("threshold", "0.25");
+    }
+
+    window.location.href = "/molecule?" + params.toString();
+  }
+
+  async function runSearch(modeOverride) {
     var input = document.getElementById("chemstructure-smiles");
     var modeSelect = document.getElementById("chemstructure-mode");
 
@@ -168,8 +180,8 @@
     }
 
     /*
-     * Before running the search, always fetch the latest structure from Ketcher.
-     * This keeps the search query in sync even if the auto-sync interval has not run yet.
+     * Before redirecting, always fetch the latest structure from Ketcher.
+     * This keeps the URL query in sync with the drawn molecule.
      */
     var smilesFromKetcher = await getSmilesFromKetcherSilently();
 
@@ -180,53 +192,16 @@
 
     var mode = modeOverride || (modeSelect ? modeSelect.value : "similarity");
     var query = input.value.trim();
-
+    
     if (!query) {
       showMessage(
         "Please draw a structure in Ketcher or paste a SMILES/SMARTS query first.",
         "warning"
       );
-      renderResults([]);
       return;
     }
 
-    showMessage("Searching molecule ...", "info");
-
-    try {
-      var response = await fetch("/api/3/action/chemstructure_rdkit_search", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify({
-          query: query,
-          mode: mode,
-          threshold: 0.25,
-          rows: 50
-        })
-      });
-
-      var payload = await response.json();
-
-      if (!payload.success) {
-        console.error("CHEMSTRUCTURE search failed:", payload);
-        showMessage("Search failed. Please check the query or CKAN logs.", "danger");
-        renderResults([]);
-        return;
-      }
-
-      var result = payload.result || {};
-      renderResults(result.results || []);
-
-      showMessage(
-        "Found " + (result.count || 0) + " matching molecule(s).",
-        "success"
-      );
-    } catch (err) {
-      console.error("CHEMSTRUCTURE search request failed:", err);
-      showMessage("Search request failed.", "danger");
-      renderResults([]);
-    }
+    redirectToMoleculeStructureSearch(query, mode);
   }
 
   function clearSearchUi() {

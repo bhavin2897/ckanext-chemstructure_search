@@ -8,6 +8,9 @@ import ckan.model as model
 from ckan.model import Package, PackageExtra
 import ckan.plugins.toolkit as toolkit
 
+from rdkit import RDLogger
+
+RDLogger.DisableLog("rdApp.error")
 
 log = logging.getLogger(__name__)
 
@@ -169,16 +172,28 @@ def _make_morgan_fp(mol, radius=2, fp_size=2048):
     return generator.GetFingerprint(mol)
 
 
-def _mol_from_smiles_or_inchi(smiles=None, inchi=None):
+def _mol_from_smiles_or_inchi(smiles=None, inchi=None, package_name=None):
     if smiles:
         mol = Chem.MolFromSmiles(smiles)
         if mol is not None:
             return mol, smiles, "smiles"
 
+        log.warning(
+            "CHEMSTRUCTURE invalid SMILES package=%s smiles=%s",
+            package_name,
+            smiles,
+        )
+
     if inchi:
         mol = Chem.MolFromInchi(inchi)
         if mol is not None:
             return mol, inchi, "inchi"
+
+        log.warning(
+            "CHEMSTRUCTURE invalid InChI package=%s inchi=%s",
+            package_name,
+            inchi,
+        )
 
     return None, None, None
 
@@ -243,46 +258,22 @@ def _load_molecule_packages_from_db():
 
     return list(molecules.values())
 
-
-def chemstructure_rdkit_search(context, data_dict):
+def run_structure_search(query, mode="similarity", threshold=0.25, rows=None):
     """
-    Solr-independent RDKit structure search.
+    Reusable RDKit structure search.
 
-    Endpoint:
-        /api/3/action/chemstructure_rdkit_search
+    This is used by:
+    - chemstructure_rdkit_search API action
+    - /molecule page filtering via IPackageController.before_search
 
-    Input examples:
-
-        Exact:
-        {
-          "query": "CCO",
-          "mode": "exact",
-          "rows": 50
-        }
-
-        SMARTS:
-        {
-          "query": "[#6]-[#8]",
-          "mode": "smarts",
-          "rows": 50
-        }
-
-        Similarity:
-        {
-          "query": "CCO",
-          "mode": "similarity",
-          "threshold": 0.7,
-          "rows": 50
-        }
+    It does not use Solr.
     """
 
-    toolkit.check_access("package_search", context, data_dict)
+    if mode == "substructure":
+        mode = "smarts"
 
-    query = data_dict.get("query") or data_dict.get("smiles")
-    mode = data_dict.get("mode", "similarity")
-    threshold = float(data_dict.get("threshold", 0.25)) # increase similarity here. 25% similarity now
-    threshold = max(0.0, min(threshold, 1.0)) # clamp for exact
-    rows_limit = int(data_dict.get("rows", 50))
+    threshold = float(threshold)
+    threshold = max(0.0, min(threshold, 1.0))
 
     if not query:
         raise toolkit.ValidationError({
@@ -306,7 +297,7 @@ def chemstructure_rdkit_search(context, data_dict):
     candidates = _load_molecule_packages_from_db()
 
     log.warning(
-        "CHEMSTRUCTURE RDKIT SEARCH mode=%s query=%s candidates=%s threshold=%s",
+        "CHEMSTRUCTURE STRUCTURE SEARCH mode=%s query=%s candidates=%s threshold=%s",
         mode,
         query,
         len(candidates),
@@ -319,6 +310,7 @@ def chemstructure_rdkit_search(context, data_dict):
         mol, source_value, source_type = _mol_from_smiles_or_inchi(
             smiles=item.get("smiles"),
             inchi=item.get("inchi"),
+            package_name=item.get("name"),
         )
 
         if mol is None:
@@ -340,11 +332,6 @@ def chemstructure_rdkit_search(context, data_dict):
             similarity = DataStructs.TanimotoSimilarity(query_fp, candidate_fp)
             matched = similarity >= threshold
 
-        if mode == "similarity":
-            hits.sort(key=lambda x: x.get("similarity", 0), reverse=True)
-        else:
-            hits.sort(key=lambda x: x.get("name") or "")
-
         if matched:
             result = {
                 "id": item.get("id"),
@@ -360,6 +347,9 @@ def chemstructure_rdkit_search(context, data_dict):
 
             hits.append(result)
 
+            if rows is not None and len(hits) >= rows:
+                break
+
     if mode == "similarity":
         hits.sort(key=lambda x: x.get("similarity", 0), reverse=True)
     else:
@@ -367,11 +357,34 @@ def chemstructure_rdkit_search(context, data_dict):
 
     return {
         "count": len(hits),
-        #"mode": mode,
         "query": query,
         "query_canonical_smiles": query_canon,
         "threshold": threshold if mode == "similarity" else None,
         "source": "postgresql_rdkit",
         "solr_used": False,
-        "results": hits[:rows_limit],
+        "results": hits,
     }
+
+def chemstructure_rdkit_search(context, data_dict):
+    """
+    Solr-independent RDKit structure search.
+
+    Endpoint:
+        /api/3/action/chemstructure_rdkit_search
+    """
+
+    toolkit.check_access("package_search", context, data_dict)
+
+    query = data_dict.get("query") or data_dict.get("smiles")
+    mode = data_dict.get("mode", "similarity")
+    threshold = float(data_dict.get("threshold", 0.25))
+    rows_limit = int(data_dict.get("rows", 50))
+
+    result = run_structure_search(
+        query=query,
+        mode=mode,
+        threshold=threshold,
+        rows=rows_limit,
+    )
+
+    return result
