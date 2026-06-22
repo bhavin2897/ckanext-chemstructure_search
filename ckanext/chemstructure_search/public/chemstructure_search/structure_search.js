@@ -19,68 +19,7 @@
       "</div>";
   }
 
-  function clearResults(searching) {
-    var table = document.getElementById("chemstructure-results-table");
-    var body = document.getElementById("chemstructure-results-body");
-    var emptyState = document.getElementById("chemstructure-empty-state");
 
-    if (body) {
-      body.innerHTML = "";
-    }
-
-    if (table) {
-      table.style.display = "none";
-    }
-
-    if (emptyState) {
-      emptyState.style.display = "block";
-      emptyState.innerHTML = searching
-        ? "Searching molecules..."
-        : "No search has been executed yet.";
-    }
-  }
-
-  function renderResults(results) {
-    var table = document.getElementById("chemstructure-results-table");
-    var body = document.getElementById("chemstructure-results-body");
-    var emptyState = document.getElementById("chemstructure-empty-state");
-
-    if (!table || !body || !emptyState) {
-      console.error("CHEMSTRUCTURE: results elements missing");
-      return;
-    }
-
-    body.innerHTML = "";
-
-    if (!results || !results.length) {
-      table.style.display = "none";
-      emptyState.style.display = "block";
-      emptyState.innerHTML = "No matching molecule(s) found.";
-      return;
-    }
-
-    results.forEach(function (item) {
-      var row = document.createElement("tr");
-
-      var moleculeId = item.id || item.name || "";
-      var moleculeName = item.name || item.id || "";
-      var moleculeUrl = "/molecule/" + encodeURIComponent(moleculeId);
-
-      row.innerHTML =
-        "<td>" +
-          '<a href="' + moleculeUrl + '" target="_blank" rel="noopener noreferrer">' +
-            "<strong>" + escapeHtml(moleculeName) + "</strong>" +
-          "</a>" +
-        "</td>" +
-        "<td>" + escapeHtml(item.title || "") + "</td>" +
-        "<td>" + escapeHtml(item.canonical_smiles || "") + "</td>";
-
-      body.appendChild(row);
-    });
-
-    emptyState.style.display = "none";
-    table.style.display = "table";
-  }
 
   function escapeHtml(value) {
     return String(value)
@@ -152,11 +91,11 @@
   }
 
   function getSelectedSearchMode() {
-  var selected = document.querySelector(
-    'input[name="chemstructure-search-mode"]:checked'
-  );
+    var selected = document.querySelector(
+      'input[name="chemstructure-search-mode"]:checked'
+    );
 
-  return selected ? selected.value : "similarity";
+    return selected ? selected.value : "similarity";
   }
 
   function redirectToMoleculeStructureSearch(query, mode) {
@@ -337,10 +276,8 @@
 
   function clearSearchUi() {
     var input = document.getElementById("chemstructure-smiles");
-    var table = document.getElementById("chemstructure-results-table");
-    var body = document.getElementById("chemstructure-results-body");
-    var emptyState = document.getElementById("chemstructure-empty-state");
     var message = document.getElementById("chemstructure-message");
+    var iframe = document.getElementById("ketcher-frame");
 
     if (input) {
       input.value = "";
@@ -348,17 +285,25 @@
 
     chemstructureLastSmiles = "";
 
-    if (body) {
-      body.innerHTML = "";
+    try {
+      window.localStorage.removeItem(CHEMSTRUCTURE_LAST_QUERY_KEY);
+      window.localStorage.removeItem(CHEMSTRUCTURE_LAST_MODE_KEY);
+      window.localStorage.removeItem(CHEMSTRUCTURE_LAST_THRESHOLD_KEY);
+    } catch (err) {
+      console.warn("CHEMSTRUCTURE: Could not clear last search:", err);
     }
 
-    if (table) {
-      table.style.display = "none";
-    }
-
-    if (emptyState) {
-      emptyState.style.display = "block";
-      emptyState.innerHTML = "No search has been executed yet.";
+    if (
+      iframe &&
+      iframe.contentWindow &&
+      iframe.contentWindow.ketcher &&
+      typeof iframe.contentWindow.ketcher.setMolecule === "function"
+    ) {
+      try {
+        iframe.contentWindow.ketcher.setMolecule("");
+      } catch (err) {
+        console.warn("CHEMSTRUCTURE: Could not clear Ketcher:", err);
+      }
     }
 
     if (message) {
