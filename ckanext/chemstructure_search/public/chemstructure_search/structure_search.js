@@ -207,6 +207,32 @@
       try {
         if (typeof iframe.contentWindow.ketcher.setMolecule === "function") {
           await iframe.contentWindow.ketcher.setMolecule(smiles);
+
+          window.setTimeout(function () {
+            try {
+              var ketcher = iframe.contentWindow && iframe.contentWindow.ketcher;
+
+              if (
+                ketcher &&
+                ketcher.editor &&
+                typeof ketcher.editor.zoom === "function"
+              ) {
+                ketcher.editor.zoom(1.0);
+              }
+
+              if (
+                ketcher &&
+                ketcher.editor &&
+                ketcher.editor.render &&
+                typeof ketcher.editor.render.update === "function"
+              ) {
+                ketcher.editor.render.update();
+              }
+            } catch (err) {
+              console.warn("CHEMSTRUCTURE: Could not reset Ketcher zoom:", err);
+            }
+          }, 300);
+
           chemstructureLastSmiles = smiles;
           window.clearInterval(timer);
           console.log("CHEMSTRUCTURE: Restored molecule in Ketcher:", smiles);
