@@ -71,9 +71,6 @@ class ChemstructureSearchPlugin(plugins.SingletonPlugin):
         structure_mode = request.args.get("structure_mode", "similarity")
         threshold = request.args.get("threshold", "0.25")
 
-        if structure_mode == "substructure":
-            structure_mode = "smarts"
-
         log.warning(
             "CHEMSTRUCTURE before_search structure_query=%s mode=%s threshold=%s path=%s",
             structure_query,

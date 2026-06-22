@@ -117,11 +117,10 @@ def chemstructure_exact_search(context, data_dict):
     candidates = solr_result.get("results", [])
 
     log.warning(
-        "CHEMSTRUCTURE STRUCTURE SEARCH mode=%s query=%s cached_candidates=%s threshold=%s",
+        "CHEMSTRUCTURE EXACT SEARCH mode=%s query=%s candidates=%s",
         mode,
         query,
         len(candidates),
-        threshold,
     )
 
     hits = []
@@ -201,6 +200,17 @@ def _mol_from_smiles_or_inchi(smiles=None, inchi=None, package_name=None):
 
 
 def _query_mol_from_input(query, mode):
+    """
+    Parse the user query according to search mode.
+
+    exact/similarity/substructure:
+        query is expected to be SMILES, normally exported from Ketcher.
+
+    smarts:
+        query is expected to be a SMARTS pattern.
+        This can be kept for advanced/manual usage.
+    """
+
     if mode == "smarts":
         pattern = Chem.MolFromSmarts(query)
         if pattern is None:
@@ -318,11 +328,7 @@ def run_structure_search(query, mode="similarity", threshold=0.25, rows=None):
     - chemstructure_rdkit_search API action
     - /molecule page filtering via IPackageController.before_search
 
-    It does not use Solr.
     """
-
-    if mode == "substructure":
-        mode = "smarts"
 
     threshold = float(threshold)
     threshold = max(0.0, min(threshold, 1.0))
@@ -332,9 +338,9 @@ def run_structure_search(query, mode="similarity", threshold=0.25, rows=None):
             "query": ["SMILES or SMARTS query is required."]
         })
 
-    if mode not in ("exact", "smarts", "similarity"):
+    if mode not in ("exact", "similarity","substructure" ,"smarts", ):
         raise toolkit.ValidationError({
-            "mode": ["Mode must be one of: exact, smarts, similarity."]
+            "mode": ["Mode must be one of: exact, smarts, similarity, substructure"]
         })
 
     query_obj = _query_mol_from_input(query, mode)
@@ -342,8 +348,10 @@ def run_structure_search(query, mode="similarity", threshold=0.25, rows=None):
     query_canon = None
     query_fp = None
 
-    if mode in ("exact", "similarity"):
+    if mode in ("exact", "similarity", "substructure"):
         query_canon = Chem.MolToSmiles(query_obj, canonical=True)
+
+    if mode == "similarity":
         query_fp = _make_morgan_fp(query_obj)
 
     candidates = _load_cached_structure_candidates()
@@ -368,7 +376,7 @@ def run_structure_search(query, mode="similarity", threshold=0.25, rows=None):
         if mode == "exact":
             matched = candidate_canon == query_canon
 
-        elif mode == "smarts":
+        elif mode in ("substructure", "smarts"):
             matched = mol.HasSubstructMatch(query_obj)
 
         elif mode == "similarity":
