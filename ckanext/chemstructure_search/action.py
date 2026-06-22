@@ -13,6 +13,7 @@ from rdkit import RDLogger
 RDLogger.DisableLog("rdApp.error")
 
 log = logging.getLogger(__name__)
+_CANDIDATE_CACHE = None
 
 
 def _first(value):
@@ -116,10 +117,11 @@ def chemstructure_exact_search(context, data_dict):
     candidates = solr_result.get("results", [])
 
     log.warning(
-        "CHEMSTRUCTURE UI SEARCH mode=%s query=%s candidates=%s",
+        "CHEMSTRUCTURE STRUCTURE SEARCH mode=%s query=%s cached_candidates=%s threshold=%s",
         mode,
         query,
         len(candidates),
+        threshold,
     )
 
     hits = []
@@ -258,6 +260,56 @@ def _load_molecule_packages_from_db():
 
     return list(molecules.values())
 
+def _load_cached_structure_candidates(force_refresh=False):
+    """
+    Load and cache RDKit-ready molecule candidates.
+
+    This avoids reparsing every molecule and regenerating fingerprints on every
+    structure-search request.
+    """
+
+    global _CANDIDATE_CACHE
+
+    if _CANDIDATE_CACHE is not None and not force_refresh:
+        return _CANDIDATE_CACHE
+
+    raw_candidates = _load_molecule_packages_from_db()
+    cached_candidates = []
+
+    for item in raw_candidates:
+        mol, source_value, source_type = _mol_from_smiles_or_inchi(
+            smiles=item.get("smiles"),
+            inchi=item.get("inchi"),
+            package_name=item.get("name"),
+        )
+
+        if mol is None:
+            continue
+
+        canonical_smiles = Chem.MolToSmiles(mol, canonical=True)
+        fingerprint = _make_morgan_fp(mol)
+
+        cached_candidates.append({
+            "id": item.get("id"),
+            "name": item.get("name"),
+            "title": item.get("title"),
+            "mol": mol,
+            "fingerprint": fingerprint,
+            "canonical_smiles": canonical_smiles,
+            "structure_source": source_type,
+            "structure_value": source_value,
+        })
+
+    _CANDIDATE_CACHE = cached_candidates
+
+    log.warning(
+        "CHEMSTRUCTURE candidate cache built raw=%s cached=%s",
+        len(raw_candidates),
+        len(cached_candidates),
+    )
+
+    return _CANDIDATE_CACHE
+
 def run_structure_search(query, mode="similarity", threshold=0.25, rows=None):
     """
     Reusable RDKit structure search.
@@ -294,7 +346,7 @@ def run_structure_search(query, mode="similarity", threshold=0.25, rows=None):
         query_canon = Chem.MolToSmiles(query_obj, canonical=True)
         query_fp = _make_morgan_fp(query_obj)
 
-    candidates = _load_molecule_packages_from_db()
+    candidates = _load_cached_structure_candidates()
 
     log.warning(
         "CHEMSTRUCTURE STRUCTURE SEARCH mode=%s query=%s candidates=%s threshold=%s",
@@ -307,16 +359,8 @@ def run_structure_search(query, mode="similarity", threshold=0.25, rows=None):
     hits = []
 
     for item in candidates:
-        mol, source_value, source_type = _mol_from_smiles_or_inchi(
-            smiles=item.get("smiles"),
-            inchi=item.get("inchi"),
-            package_name=item.get("name"),
-        )
-
-        if mol is None:
-            continue
-
-        candidate_canon = Chem.MolToSmiles(mol, canonical=True)
+        mol = item.get("mol")
+        candidate_canon = item.get("canonical_smiles")
 
         matched = False
         similarity = None
@@ -328,7 +372,7 @@ def run_structure_search(query, mode="similarity", threshold=0.25, rows=None):
             matched = mol.HasSubstructMatch(query_obj)
 
         elif mode == "similarity":
-            candidate_fp = _make_morgan_fp(mol)
+            candidate_fp = item.get("fingerprint")
             similarity = DataStructs.TanimotoSimilarity(query_fp, candidate_fp)
             matched = similarity >= threshold
 
@@ -338,7 +382,7 @@ def run_structure_search(query, mode="similarity", threshold=0.25, rows=None):
                 "name": item.get("name"),
                 "title": item.get("title"),
                 "mode": mode,
-                "structure_source": source_type,
+                "structure_source": item.get("structure_source"),
                 "canonical_smiles": candidate_canon,
             }
 
