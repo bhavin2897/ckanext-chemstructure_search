@@ -1,6 +1,9 @@
 (function () {
   var chemstructureAutoSyncTimer = null;
   var chemstructureLastSmiles = "";
+  var CHEMSTRUCTURE_LAST_QUERY_KEY = "chemstructure_last_query";
+  var CHEMSTRUCTURE_LAST_MODE_KEY = "chemstructure_last_mode";
+  var CHEMSTRUCTURE_LAST_THRESHOLD_KEY = "chemstructure_last_threshold";
 
   function showMessage(message, type) {
     var el = document.getElementById("chemstructure-message");
@@ -156,7 +159,11 @@
   return selected ? selected.value : "similarity";
   }
 
-   function redirectToMoleculeStructureSearch(query, mode) {
+  function redirectToMoleculeStructureSearch(query, mode) {
+    var threshold = mode === "similarity" ? "0.25" : "";
+
+    saveLastStructureSearch(query, mode, threshold);
+
     var params = new URLSearchParams();
 
     params.set("structure_query", query);
@@ -164,10 +171,134 @@
     params.set("sort", "title_string asc");
 
     if (mode === "similarity") {
-      params.set("threshold", "0.25");
+      params.set("threshold", threshold);
     }
 
     window.location.href = "/molecule?" + params.toString();
+  }
+
+  function saveLastStructureSearch(query, mode, threshold) {
+    try {
+      window.localStorage.setItem(CHEMSTRUCTURE_LAST_QUERY_KEY, query || "");
+      window.localStorage.setItem(CHEMSTRUCTURE_LAST_MODE_KEY, mode || "similarity");
+      window.localStorage.setItem(CHEMSTRUCTURE_LAST_THRESHOLD_KEY, threshold || "0.25");
+    } catch (err) {
+      console.warn("CHEMSTRUCTURE: Could not save last search:", err);
+    }
+  }
+
+  function getStructureSearchFromUrl() {
+    var params = new URLSearchParams(window.location.search);
+
+    var query = params.get("structure_query");
+    var mode = params.get("structure_mode");
+    var threshold = params.get("threshold");
+
+    if (!query) {
+      return null;
+    }
+
+    return {
+      query: query,
+      mode: mode || "similarity",
+      threshold: threshold || "0.25"
+    };
+  }
+
+  function getLastStructureSearch() {
+    var fromUrl = getStructureSearchFromUrl();
+
+    if (fromUrl) {
+      return fromUrl;
+    }
+
+    try {
+      var query = window.localStorage.getItem(CHEMSTRUCTURE_LAST_QUERY_KEY);
+      var mode = window.localStorage.getItem(CHEMSTRUCTURE_LAST_MODE_KEY);
+      var threshold = window.localStorage.getItem(CHEMSTRUCTURE_LAST_THRESHOLD_KEY);
+
+      if (!query) {
+        return null;
+      }
+
+      return {
+        query: query,
+        mode: mode || "similarity",
+        threshold: threshold || "0.25"
+      };
+    } catch (err) {
+      console.warn("CHEMSTRUCTURE: Could not read last search:", err);
+      return null;
+    }
+    }
+
+  function restoreSelectedSearchMode(mode) {
+    var selected = document.querySelector(
+      'input[name="chemstructure-search-mode"][value="' + mode + '"]'
+    );
+
+    if (selected) {
+      selected.checked = true;
+    }
+  }
+
+  async function restoreMoleculeInKetcher(smiles) {
+    var iframe = document.getElementById("ketcher-frame");
+
+    if (!iframe || !smiles) {
+      return;
+    }
+
+    /*
+     * Ketcher may not be ready immediately when the Bootstrap modal opens.
+     * Try several times before giving up.
+     */
+    var attempts = 0;
+
+    var timer = window.setInterval(async function () {
+      attempts += 1;
+
+      if (!iframe.contentWindow || !iframe.contentWindow.ketcher) {
+        if (attempts >= 20) {
+          window.clearInterval(timer);
+        }
+        return;
+      }
+
+      try {
+        if (typeof iframe.contentWindow.ketcher.setMolecule === "function") {
+          await iframe.contentWindow.ketcher.setMolecule(smiles);
+          chemstructureLastSmiles = smiles;
+          window.clearInterval(timer);
+          console.log("CHEMSTRUCTURE: Restored molecule in Ketcher:", smiles);
+        }
+      } catch (err) {
+        console.warn("CHEMSTRUCTURE: Could not restore molecule in Ketcher:", err);
+        window.clearInterval(timer);
+      }
+
+      if (attempts >= 20) {
+        window.clearInterval(timer);
+      }
+    }, 300);
+  }
+
+  function restoreLastStructureSearch() {
+    var lastSearch = getLastStructureSearch();
+
+    if (!lastSearch || !lastSearch.query) {
+      return;
+    }
+
+    var input = document.getElementById("chemstructure-smiles");
+
+    if (input) {
+      input.value = lastSearch.query;
+      chemstructureLastSmiles = lastSearch.query;
+    }
+
+    restoreSelectedSearchMode(lastSearch.mode);
+    restoreMoleculeInKetcher(lastSearch.query);
   }
 
   async function runSearch(modeOverride) {
@@ -262,14 +393,16 @@
     var modal = document.getElementById("chemstructure-home-modal");
 
     if (modal && window.jQuery) {
-      window.jQuery(modal).on("shown.bs.modal", function () {
-        startKetcherAutoSync();
-      });
+    window.jQuery(modal).on("shown.bs.modal", function () {
+      startKetcherAutoSync();
+      restoreLastStructureSearch();
+    });
     }
 
     /*
      * Fallback for the full-page mode where there is no modal.
      */
     startKetcherAutoSync();
+    restoreLastStructureSearch();
   });
 })();
