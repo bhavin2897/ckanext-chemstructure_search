@@ -1,9 +1,13 @@
 (function () {
   var chemstructureAutoSyncTimer = null;
   var chemstructureLastSmiles = "";
+
   var CHEMSTRUCTURE_LAST_QUERY_KEY = "chemstructure_last_query";
   var CHEMSTRUCTURE_LAST_MODE_KEY = "chemstructure_last_mode";
   var CHEMSTRUCTURE_LAST_THRESHOLD_KEY = "chemstructure_last_threshold";
+
+  var DEFAULT_MODE = "similarity";
+  var DEFAULT_THRESHOLD = "0.25";
 
   function showMessage(message, type) {
     var el = document.getElementById("chemstructure-message");
@@ -19,8 +23,6 @@
       "</div>";
   }
 
-
-
   function escapeHtml(value) {
     return String(value)
       .replace(/&/g, "&amp;")
@@ -28,6 +30,24 @@
       .replace(/>/g, "&gt;")
       .replace(/"/g, "&quot;")
       .replace(/'/g, "&#039;");
+  }
+
+  function normalizeThreshold(value) {
+    var numberValue = parseFloat(value);
+
+    if (isNaN(numberValue)) {
+      numberValue = parseFloat(DEFAULT_THRESHOLD);
+    }
+
+    if (numberValue < 0.05) {
+      numberValue = 0.05;
+    }
+
+    if (numberValue > 1.0) {
+      numberValue = 1.0;
+    }
+
+    return numberValue.toFixed(2);
   }
 
   async function getSmilesFromKetcherSilently() {
@@ -95,34 +115,93 @@
       'input[name="chemstructure-search-mode"]:checked'
     );
 
-    return selected ? selected.value : "similarity";
+    return selected ? selected.value : DEFAULT_MODE;
   }
 
-  function redirectToMoleculeStructureSearch(query, mode) {
-    var threshold = mode === "similarity" ? "0.25" : "";
+  function restoreSelectedSearchMode(mode) {
+    var safeMode = mode || DEFAULT_MODE;
 
-    saveLastStructureSearch(query, mode, threshold);
+    var selected = document.querySelector(
+      'input[name="chemstructure-search-mode"][value="' + safeMode + '"]'
+    );
 
-    var params = new URLSearchParams();
-
-    params.set("structure_query", query);
-    params.set("structure_mode", mode);
-    params.set("sort", "title_string asc");
-
-    if (mode === "similarity") {
-      params.set("threshold", threshold);
+    if (selected) {
+      selected.checked = true;
+      return;
     }
 
-    window.location.href = "/molecule?" + params.toString();
+    var fallback = document.querySelector(
+      'input[name="chemstructure-search-mode"][value="' + DEFAULT_MODE + '"]'
+    );
+
+    if (fallback) {
+      fallback.checked = true;
+    }
+  }
+
+  function getSelectedThreshold() {
+    var thresholdInput = document.getElementById("chemstructure-threshold");
+
+    if (!thresholdInput) {
+      return DEFAULT_THRESHOLD;
+    }
+
+    return normalizeThreshold(thresholdInput.value || DEFAULT_THRESHOLD);
+  }
+
+  function setThresholdValue(value) {
+    var thresholdInput = document.getElementById("chemstructure-threshold");
+
+    if (!thresholdInput) {
+      return;
+    }
+
+    thresholdInput.value = normalizeThreshold(value || DEFAULT_THRESHOLD);
+    updateThresholdValueLabel();
+  }
+
+  function updateThresholdValueLabel() {
+    var thresholdInput = document.getElementById("chemstructure-threshold");
+    var thresholdValue = document.getElementById("chemstructure-threshold-value");
+
+    if (!thresholdInput || !thresholdValue) {
+      return;
+    }
+
+    thresholdValue.textContent = normalizeThreshold(thresholdInput.value);
+  }
+
+  function updateThresholdVisibility() {
+    var mode = getSelectedSearchMode();
+    var wrapper = document.getElementById("chemstructure-threshold-wrapper");
+
+    if (!wrapper) {
+      return;
+    }
+
+    wrapper.style.display = mode === "similarity" ? "flex" : "none";
   }
 
   function saveLastStructureSearch(query, mode, threshold) {
     try {
       window.localStorage.setItem(CHEMSTRUCTURE_LAST_QUERY_KEY, query || "");
-      window.localStorage.setItem(CHEMSTRUCTURE_LAST_MODE_KEY, mode || "similarity");
-      window.localStorage.setItem(CHEMSTRUCTURE_LAST_THRESHOLD_KEY, threshold || "0.25");
+      window.localStorage.setItem(CHEMSTRUCTURE_LAST_MODE_KEY, mode || DEFAULT_MODE);
+      window.localStorage.setItem(
+        CHEMSTRUCTURE_LAST_THRESHOLD_KEY,
+        normalizeThreshold(threshold || DEFAULT_THRESHOLD)
+      );
     } catch (err) {
       console.warn("CHEMSTRUCTURE: Could not save last search:", err);
+    }
+  }
+
+  function clearLastStructureSearch() {
+    try {
+      window.localStorage.removeItem(CHEMSTRUCTURE_LAST_QUERY_KEY);
+      window.localStorage.removeItem(CHEMSTRUCTURE_LAST_MODE_KEY);
+      window.localStorage.removeItem(CHEMSTRUCTURE_LAST_THRESHOLD_KEY);
+    } catch (err) {
+      console.warn("CHEMSTRUCTURE: Could not clear last search:", err);
     }
   }
 
@@ -139,8 +218,8 @@
 
     return {
       query: query,
-      mode: mode || "similarity",
-      threshold: threshold || "0.25"
+      mode: mode || DEFAULT_MODE,
+      threshold: normalizeThreshold(threshold || DEFAULT_THRESHOLD)
     };
   }
 
@@ -162,23 +241,31 @@
 
       return {
         query: query,
-        mode: mode || "similarity",
-        threshold: threshold || "0.25"
+        mode: mode || DEFAULT_MODE,
+        threshold: normalizeThreshold(threshold || DEFAULT_THRESHOLD)
       };
     } catch (err) {
       console.warn("CHEMSTRUCTURE: Could not read last search:", err);
       return null;
     }
+  }
+
+  function redirectToMoleculeStructureSearch(query, mode) {
+    var threshold = mode === "similarity" ? getSelectedThreshold() : "";
+
+    saveLastStructureSearch(query, mode, threshold);
+
+    var params = new URLSearchParams();
+
+    params.set("structure_query", query);
+    params.set("structure_mode", mode);
+    params.set("sort", "title_string asc");
+
+    if (mode === "similarity") {
+      params.set("threshold", threshold);
     }
 
-  function restoreSelectedSearchMode(mode) {
-    var selected = document.querySelector(
-      'input[name="chemstructure-search-mode"][value="' + mode + '"]'
-    );
-
-    if (selected) {
-      selected.checked = true;
-    }
+    window.location.href = "/molecule?" + params.toString();
   }
 
   async function restoreMoleculeInKetcher(smiles) {
@@ -188,10 +275,6 @@
       return;
     }
 
-    /*
-     * Ketcher may not be ready immediately when the Bootstrap modal opens.
-     * Try several times before giving up.
-     */
     var attempts = 0;
 
     var timer = window.setInterval(async function () {
@@ -205,28 +288,31 @@
       }
 
       try {
-        if (typeof iframe.contentWindow.ketcher.setMolecule === "function") {
-          await iframe.contentWindow.ketcher.setMolecule(smiles);
+        var ketcher = iframe.contentWindow.ketcher;
+
+        if (typeof ketcher.setMolecule === "function") {
+          await ketcher.setMolecule(smiles);
 
           window.setTimeout(function () {
             try {
-              var ketcher = iframe.contentWindow && iframe.contentWindow.ketcher;
+              var currentKetcher =
+                iframe.contentWindow && iframe.contentWindow.ketcher;
 
               if (
-                ketcher &&
-                ketcher.editor &&
-                typeof ketcher.editor.zoom === "function"
+                currentKetcher &&
+                currentKetcher.editor &&
+                typeof currentKetcher.editor.zoom === "function"
               ) {
-                ketcher.editor.zoom(1.0);
+                currentKetcher.editor.zoom(1.0);
               }
 
               if (
-                ketcher &&
-                ketcher.editor &&
-                ketcher.editor.render &&
-                typeof ketcher.editor.render.update === "function"
+                currentKetcher &&
+                currentKetcher.editor &&
+                currentKetcher.editor.render &&
+                typeof currentKetcher.editor.render.update === "function"
               ) {
-                ketcher.editor.render.update();
+                currentKetcher.editor.render.update();
               }
             } catch (err) {
               console.warn("CHEMSTRUCTURE: Could not reset Ketcher zoom:", err);
@@ -235,6 +321,7 @@
 
           chemstructureLastSmiles = smiles;
           window.clearInterval(timer);
+
           console.log("CHEMSTRUCTURE: Restored molecule in Ketcher:", smiles);
         }
       } catch (err) {
@@ -252,6 +339,8 @@
     var lastSearch = getLastStructureSearch();
 
     if (!lastSearch || !lastSearch.query) {
+      updateThresholdVisibility();
+      updateThresholdValueLabel();
       return;
     }
 
@@ -263,12 +352,16 @@
     }
 
     restoreSelectedSearchMode(lastSearch.mode);
+    setThresholdValue(lastSearch.threshold);
+
+    updateThresholdVisibility();
+    updateThresholdValueLabel();
+
     restoreMoleculeInKetcher(lastSearch.query);
   }
 
   async function runSearch(modeOverride) {
     var input = document.getElementById("chemstructure-smiles");
-    var modeSelect = document.getElementById("chemstructure-mode");
 
     if (!input) {
       showMessage("SMILES / SMARTS input field was not found.", "danger");
@@ -286,9 +379,9 @@
       chemstructureLastSmiles = smilesFromKetcher;
     }
 
-    var mode = modeOverride || (modeSelect ? modeSelect.value : "similarity");
+    var mode = modeOverride || getSelectedSearchMode();
     var query = input.value.trim();
-    
+
     if (!query) {
       showMessage(
         "Please draw a structure in Ketcher or paste a SMILES/SMARTS query first.",
@@ -300,24 +393,8 @@
     redirectToMoleculeStructureSearch(query, mode);
   }
 
-  function clearSearchUi() {
-    var input = document.getElementById("chemstructure-smiles");
-    var message = document.getElementById("chemstructure-message");
+  function clearKetcher() {
     var iframe = document.getElementById("ketcher-frame");
-
-    if (input) {
-      input.value = "";
-    }
-
-    chemstructureLastSmiles = "";
-
-    try {
-      window.localStorage.removeItem(CHEMSTRUCTURE_LAST_QUERY_KEY);
-      window.localStorage.removeItem(CHEMSTRUCTURE_LAST_MODE_KEY);
-      window.localStorage.removeItem(CHEMSTRUCTURE_LAST_THRESHOLD_KEY);
-    } catch (err) {
-      console.warn("CHEMSTRUCTURE: Could not clear last search:", err);
-    }
 
     if (
       iframe &&
@@ -331,15 +408,62 @@
         console.warn("CHEMSTRUCTURE: Could not clear Ketcher:", err);
       }
     }
+  }
+
+  function clearSearchUi() {
+    var input = document.getElementById("chemstructure-smiles");
+    var message = document.getElementById("chemstructure-message");
+
+    if (input) {
+      input.value = "";
+    }
+
+    chemstructureLastSmiles = "";
+
+    clearLastStructureSearch();
+    clearKetcher();
+
+    restoreSelectedSearchMode(DEFAULT_MODE);
+    setThresholdValue(DEFAULT_THRESHOLD);
+    updateThresholdVisibility();
+    updateThresholdValueLabel();
 
     if (message) {
       message.innerHTML = "";
     }
   }
 
+  function bindThresholdEvents() {
+    var thresholdInput = document.getElementById("chemstructure-threshold");
+    var modeRadios = document.querySelectorAll(
+      'input[name="chemstructure-search-mode"]'
+    );
+
+    if (thresholdInput) {
+      thresholdInput.addEventListener("input", function () {
+        updateThresholdValueLabel();
+      });
+
+      thresholdInput.addEventListener("change", function () {
+        updateThresholdValueLabel();
+      });
+    }
+
+    Array.prototype.forEach.call(modeRadios, function (radio) {
+      radio.addEventListener("change", function () {
+        updateThresholdVisibility();
+        updateThresholdValueLabel();
+      });
+    });
+
+    updateThresholdVisibility();
+    updateThresholdValueLabel();
+  }
+
   document.addEventListener("DOMContentLoaded", function () {
     var searchBtn = document.getElementById("chemstructure-search");
     var clearBtn = document.getElementById("chemstructure-clear");
+    var modal = document.getElementById("chemstructure-home-modal");
 
     if (searchBtn) {
       searchBtn.addEventListener("click", function (event) {
@@ -357,21 +481,21 @@
       });
     }
 
-    /*
-     * Start auto-sync when the homepage modal is opened.
-     * This is important because Ketcher may not be ready when the page first loads.
-     */
-    var modal = document.getElementById("chemstructure-home-modal");
+    bindThresholdEvents();
 
+    /*
+     * Start auto-sync when the modal is opened.
+     * Ketcher may not be fully ready at page load.
+     */
     if (modal && window.jQuery) {
-    window.jQuery(modal).on("shown.bs.modal", function () {
-      startKetcherAutoSync();
-      restoreLastStructureSearch();
-    });
+      window.jQuery(modal).on("shown.bs.modal", function () {
+        startKetcherAutoSync();
+        restoreLastStructureSearch();
+      });
     }
 
     /*
-     * Fallback for the full-page mode where there is no modal.
+     * Fallback for full-page usage or when the iframe is already available.
      */
     startKetcherAutoSync();
     restoreLastStructureSearch();
