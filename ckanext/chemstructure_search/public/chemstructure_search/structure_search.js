@@ -148,6 +148,14 @@
     console.log("CHEMSTRUCTURE: Ketcher auto-sync started");
   }
 
+  function getSelectedSearchMode() {
+  var selected = document.querySelector(
+    'input[name="chemstructure-search-mode"]:checked'
+  );
+
+  return selected ? selected.value : "similarity";
+  }
+
   async function runSearch(modeOverride) {
     clearResults(true);
 
@@ -253,33 +261,15 @@
   }
 
   document.addEventListener("DOMContentLoaded", function () {
-    var similarityBtn = document.getElementById("chemstructure-search-similarity");
-    var exactBtn = document.getElementById("chemstructure-search-exact");
-    var selectedModeBtn = document.getElementById("chemstructure-search");
+    var searchBtn = document.getElementById("chemstructure-search");
     var clearBtn = document.getElementById("chemstructure-clear");
 
-    if (similarityBtn) {
-      similarityBtn.addEventListener("click", function (event) {
+    if (searchBtn) {
+      searchBtn.addEventListener("click", function (event) {
         event.preventDefault();
-        runSearch("similarity");
-      });
-    }
 
-    if (exactBtn) {
-      exactBtn.addEventListener("click", function (event) {
-        event.preventDefault();
-        runSearch("exact");
-      });
-    }
-
-    /*
-     * Optional support for the old full-page button:
-     * <button id="chemstructure-search">Search molecules</button>
-     */
-    if (selectedModeBtn) {
-      selectedModeBtn.addEventListener("click", function (event) {
-        event.preventDefault();
-        runSearch();
+        var mode = getSelectedSearchMode();
+        runSearch(mode);
       });
     }
 

@@ -49,21 +49,48 @@
             class="form-control"
             type="text"
             placeholder="Draw a structure or paste a SMILES/SMARTS query">
-        </div>
+              </div>
 
-        <div class="chemstructure-actions">
-          <button id="chemstructure-search-similarity" class="btn btn-primary">
-            Fingerprint similarity
-          </button>
+        <div class="chemstructure-search-mode">
+        <label class="chemstructure-search-mode-title">
+          Search type
+        </label>
 
-          <button id="chemstructure-search-exact" class="btn btn-default">
-            Exact match
-          </button>
+        <label class="chemstructure-radio-option">
+          <input
+            type="radio"
+            name="chemstructure-search-mode"
+            value="exact">
+          <span>Exact match</span>
+        </label>
 
-          <button id="chemstructure-clear" class="btn btn-link">
-            Clear
-          </button>
-        </div>
+        <label class="chemstructure-radio-option">
+          <input
+            type="radio"
+            name="chemstructure-search-mode"
+            value="similarity"
+            checked>
+          <span>Fingerprint similarity</span>
+        </label>
+
+        <label class="chemstructure-radio-option">
+          <input
+            type="radio"
+            name="chemstructure-search-mode"
+            value="smarts">
+          <span>Substructure</span>
+        </label>
+      </div>
+
+      <div class="chemstructure-actions">
+      <button id="chemstructure-search" class="btn btn-primary">
+        Search
+      </button>
+
+      <button id="chemstructure-clear" class="btn btn-link">
+        Clear
+      </button>
+      </div>
 
         <div id="chemstructure-message" class="chemstructure-message"></div>
 
@@ -119,34 +146,29 @@
   .structure-search-small-button {
     display: inline-flex;
     align-items: center;
-    justify-content: center;
+    /*justify-content: center;*/
     gap: 6px;
-
     padding: 5px 10px;
-
-    color: #ffffff;
+    color: #fff;
     background: #1f9aaa;
     border: 1px solid #1f9aaa;
     border-radius: 4px;
-
     font-size: 14px;
     font-weight: 600;
     line-height: 1.2;
-
     box-shadow: none;
     cursor: pointer;
   }
 
   .structure-search-small-button:hover,
   .structure-search-small-button:focus {
-    color: #eefafb;
+    color: #fff;
     background: #168998;
     border-color: #168998;
   }
 
-  .structure-search-small-icon {
-    font-size: 14px;
-    line-height: 1;
+  .structure-search-small-button .fa {
+    font-size: 13px;
   }
 
   .chemstructure-modal-dialog {
@@ -166,6 +188,34 @@
     margin-top: 16px;
   }
 
+  .chemstructure-search-mode {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 14px;
+    margin-top: 14px;
+    margin-bottom: 8px;
+  }
+
+  .chemstructure-search-mode-title {
+    margin: 0;
+    font-weight: 700;
+    color: #333;
+  }
+
+  .chemstructure-radio-option {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    margin: 0;
+    font-weight: 400;
+    cursor: pointer;
+  }
+
+  .chemstructure-radio-option input {
+    margin: 0;
+  }
+
   .chemstructure-actions {
     display: flex;
     flex-wrap: wrap;
@@ -175,7 +225,7 @@
   }
 
   .chemstructure-actions .btn {
-    min-width: 130px;
+    min-width: 100px;
   }
 
   .chemstructure-message {
@@ -211,6 +261,16 @@
 
     .structure-search-inline {
       margin-left: 0;
+    }
+
+    .chemstructure-search-mode {
+      align-items: flex-start;
+    }
+
+    .chemstructure-search-mode label::after,
+    .chemstructure-radio-option::after,
+    .chemstructure-search-mode-title::after {
+      content: none !important;
     }
   }
 </style>
