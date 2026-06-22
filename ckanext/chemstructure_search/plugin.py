@@ -142,15 +142,32 @@ class ChemstructureSearchPlugin(plugins.SingletonPlugin):
         search_params["fq"] = "{} {}".format(existing_fq, fq)
 
     def _build_name_filter(self, names):
-        quoted_names = [
-            '"{}"'.format(self._escape_solr_phrase(name))
+        """
+        Build a Solr filter for many package names.
+
+        Use Solr terms query parser instead:
+            {!terms f=name}a,b,c
+        """
+
+        cleaned_names = [
+            self._escape_solr_terms_value(name)
             for name in names
+            if name
         ]
 
-        return "name:({})".format(" OR ".join(quoted_names))
+        if not cleaned_names:
+            return 'name:"__chemstructure_no_results__"'
 
-    def _escape_solr_phrase(self, value):
-        return str(value).replace("\\", "\\\\").replace('"', '\\"')
+        return "{!terms f=name}" + ",".join(cleaned_names)
+
+    def _escape_solr_terms_value(self, value):
+        """
+        Escape values for Solr {!terms} parser.
+
+        Package names normally do not contain commas, but escape defensively.
+        """
+
+        return str(value).replace("\\", "\\\\").replace(",", "\\,")
 
     def _remove_structure_params_from_fq(self, search_params):
         """
