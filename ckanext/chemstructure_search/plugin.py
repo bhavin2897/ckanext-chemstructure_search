@@ -6,6 +6,7 @@ import ckan.plugins as plugins
 import ckan.plugins.toolkit as toolkit
 
 from ckanext.chemstructure_search.action import (chemstructure_exact_search, chemstructure_rdkit_search, run_structure_search)
+from ckanext.chemstructure_search.helpers import chemstructure_search_params
 
 from ckanext.chemstructure_search.views import get_blueprints
 
@@ -18,6 +19,7 @@ class ChemstructureSearchPlugin(plugins.SingletonPlugin):
     plugins.implements(plugins.IBlueprint)
     plugins.implements(plugins.IActions)
     plugins.implements(plugins.IPackageController, inherit=True)
+    plugins.implements(plugins.ITemplateHelpers,inherit=True)
 
     def update_config(self, config):
         toolkit.add_template_directory(config, "templates")
@@ -30,6 +32,11 @@ class ChemstructureSearchPlugin(plugins.SingletonPlugin):
         return {
             "chemstructure_exact_search": chemstructure_exact_search,
             "chemstructure_rdkit_search": chemstructure_rdkit_search,
+        }
+
+    def get_helpers(self):
+        return {
+            "chemstructure_search_params" : chemstructure_search_params
         }
 
     def before_search(self, search_params):

@@ -1,0 +1,133 @@
+{% set structure = h.chemstructure_search_params() %}
+
+{% if structure %}
+  <div class="chemstructure-active-search">
+    <div class="chemstructure-active-search__content">
+
+      <div class="chemstructure-active-search__details">
+        <div class="chemstructure-active-search__title">
+          Structure search active
+        </div>
+
+        <a
+          class="chemstructure-active-search__clear"
+          href="{{ structure.clear_url }}">
+          Clear structure search
+        </a>
+
+        <div class="chemstructure-active-search__row">
+          <strong>Mode:</strong>
+          <span>{{ structure.mode_label }}</span>
+        </div>
+
+        {% if structure.mode == 'similarity' %}
+          <div class="chemstructure-active-search__row">
+            <strong>Threshold:</strong>
+            <span>{{ structure.threshold }}</span>
+          </div>
+        {% endif %}
+
+        <div class="chemstructure-active-search__row">
+          <strong>Query:</strong>
+          <code>{{ structure.query }}</code>
+        </div>
+      </div>
+
+      <div class="chemstructure-active-search__image-column">
+        <div
+          id="chemstructure-active-query-image"
+          class="chemstructure-active-query-image"
+          style="display:none;">
+        </div>
+      </div>
+
+    </div>
+  </div>
+{% endif %}
+
+<style>
+  .chemstructure-active-search {
+  margin: 14px 0 20px;
+  padding: 12px 14px;
+  border: 1px solid #b9e3e8;
+  border-left: 4px solid #1f9aaa;
+  border-radius: 4px;
+  background: #f2fbfc;
+  color: #333;
+}
+
+.chemstructure-active-search__content {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+}
+
+.chemstructure-active-search__details {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.chemstructure-active-search__title {
+  margin-bottom: 4px;
+  font-weight: 700;
+}
+
+.chemstructure-active-search__clear {
+  display: inline-block;
+  margin-bottom: 8px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.chemstructure-active-search__row {
+  display: flex;
+  gap: 8px;
+  margin-top: 3px;
+  font-size: 13px;
+}
+
+.chemstructure-active-search__row strong {
+  min-width: 76px;
+}
+
+.chemstructure-active-search__row code {
+  white-space: normal;
+  word-break: break-all;
+}
+
+.chemstructure-active-search__image-column {
+  flex: 0 0 150px;
+  display: flex;
+  justify-content: flex-end;
+}
+
+.chemstructure-active-query-image {
+  width: 140px;
+  min-height: 100px;
+  padding: 6px;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  background: #fff;
+}
+
+.chemstructure-active-query-image svg,
+.chemstructure-active-query-image img,
+.chemstructure-active-query-image__img {
+  display: block;
+  max-width: 126px;
+  max-height: 110px;
+  margin: 0 auto;
+}
+
+@media (max-width: 768px) {
+  .chemstructure-active-search__content {
+    flex-direction: column;
+  }
+
+  .chemstructure-active-search__image-column {
+    flex: none;
+    justify-content: flex-start;
+  }
+}
+</style>

@@ -5,6 +5,7 @@
   var CHEMSTRUCTURE_LAST_QUERY_KEY = "chemstructure_last_query";
   var CHEMSTRUCTURE_LAST_MODE_KEY = "chemstructure_last_mode";
   var CHEMSTRUCTURE_LAST_THRESHOLD_KEY = "chemstructure_last_threshold";
+  var CHEMSTRUCTURE_QUERY_IMAGE_KEY = "chemstructure_query_image";
 
   var DEFAULT_MODE = "similarity";
   var DEFAULT_THRESHOLD = "0.25";
@@ -101,6 +102,12 @@
   }
 
   function startKetcherAutoSync() {
+    var iframe = document.getElementById("ketcher-frame");
+
+    if (!iframe) {
+      return;
+    }
+
     window.clearInterval(chemstructureAutoSyncTimer);
 
     chemstructureAutoSyncTimer = window.setInterval(function () {
@@ -185,7 +192,10 @@
   function saveLastStructureSearch(query, mode, threshold) {
     try {
       window.localStorage.setItem(CHEMSTRUCTURE_LAST_QUERY_KEY, query || "");
-      window.localStorage.setItem(CHEMSTRUCTURE_LAST_MODE_KEY, mode || DEFAULT_MODE);
+      window.localStorage.setItem(
+        CHEMSTRUCTURE_LAST_MODE_KEY,
+        mode || DEFAULT_MODE
+      );
       window.localStorage.setItem(
         CHEMSTRUCTURE_LAST_THRESHOLD_KEY,
         normalizeThreshold(threshold || DEFAULT_THRESHOLD)
@@ -200,6 +210,7 @@
       window.localStorage.removeItem(CHEMSTRUCTURE_LAST_QUERY_KEY);
       window.localStorage.removeItem(CHEMSTRUCTURE_LAST_MODE_KEY);
       window.localStorage.removeItem(CHEMSTRUCTURE_LAST_THRESHOLD_KEY);
+      window.sessionStorage.removeItem(CHEMSTRUCTURE_QUERY_IMAGE_KEY);
     } catch (err) {
       console.warn("CHEMSTRUCTURE: Could not clear last search:", err);
     }
@@ -233,7 +244,9 @@
     try {
       var query = window.localStorage.getItem(CHEMSTRUCTURE_LAST_QUERY_KEY);
       var mode = window.localStorage.getItem(CHEMSTRUCTURE_LAST_MODE_KEY);
-      var threshold = window.localStorage.getItem(CHEMSTRUCTURE_LAST_THRESHOLD_KEY);
+      var threshold = window.localStorage.getItem(
+        CHEMSTRUCTURE_LAST_THRESHOLD_KEY
+      );
 
       if (!query) {
         return null;
@@ -247,6 +260,113 @@
     } catch (err) {
       console.warn("CHEMSTRUCTURE: Could not read last search:", err);
       return null;
+    }
+  }
+
+  function normalizeKetcherImage(image) {
+    return new Promise(function (resolve) {
+      if (!image) {
+        resolve(null);
+        return;
+      }
+
+      /*
+       * Case 1: Ketcher returns SVG string or data URL string.
+       */
+      if (typeof image === "string") {
+        resolve(image);
+        return;
+      }
+
+      /*
+       * Case 2: Ketcher returns Blob.
+       */
+      if (window.Blob && image instanceof Blob) {
+        var reader = new FileReader();
+
+        reader.onload = function () {
+          resolve(reader.result);
+        };
+
+        reader.onerror = function () {
+          console.warn("CHEMSTRUCTURE: Could not read Ketcher image blob.");
+          resolve(null);
+        };
+
+        reader.readAsDataURL(image);
+        return;
+      }
+
+      console.warn("CHEMSTRUCTURE: Unsupported Ketcher image format:", image);
+      resolve(null);
+    });
+  }
+
+  async function getStructureImageFromKetcherSilently() {
+    var iframe = document.getElementById("ketcher-frame");
+
+    if (!iframe || !iframe.contentWindow || !iframe.contentWindow.ketcher) {
+      console.warn("CHEMSTRUCTURE: Ketcher iframe is not ready for image export.");
+      return null;
+    }
+
+    try {
+      var ketcher = iframe.contentWindow.ketcher;
+
+      /*
+       * Ketcher builds differ. Try SVG first, then PNG.
+       * Image export is optional. Search must still work if this fails.
+       */
+      if (typeof ketcher.generateImage === "function") {
+        try {
+          var svgImage = await ketcher.generateImage("svg");
+
+          if (svgImage) {
+            console.log("CHEMSTRUCTURE: Ketcher SVG image exported.");
+            return await normalizeKetcherImage(svgImage);
+          }
+        } catch (svgErr) {
+          console.warn("CHEMSTRUCTURE: SVG export failed, trying PNG:", svgErr);
+        }
+
+        try {
+          var pngImage = await ketcher.generateImage("png");
+
+          if (pngImage) {
+            console.log("CHEMSTRUCTURE: Ketcher PNG image exported.");
+            return await normalizeKetcherImage(pngImage);
+          }
+        } catch (pngErr) {
+          console.warn("CHEMSTRUCTURE: PNG export failed:", pngErr);
+        }
+      }
+
+      console.warn("CHEMSTRUCTURE: ketcher.generateImage is not available.");
+    } catch (err) {
+      console.warn("CHEMSTRUCTURE: Could not export Ketcher image:", err);
+    }
+
+    return null;
+  }
+
+  async function saveStructureImageForResultPage() {
+    try {
+      var image = await getStructureImageFromKetcherSilently();
+
+      if (!image) {
+        console.warn("CHEMSTRUCTURE: No query image was exported.");
+        window.sessionStorage.removeItem(CHEMSTRUCTURE_QUERY_IMAGE_KEY);
+        return;
+      }
+
+      window.sessionStorage.setItem(CHEMSTRUCTURE_QUERY_IMAGE_KEY, image);
+
+      console.log(
+        "CHEMSTRUCTURE: Query image saved for result page. Length:",
+        image.length
+      );
+    } catch (err) {
+      console.warn("CHEMSTRUCTURE: Could not save query image:", err);
     }
   }
 
@@ -264,6 +384,13 @@
     if (mode === "similarity") {
       params.set("threshold", threshold);
     }
+
+    console.log(
+      "CHEMSTRUCTURE: Redirecting to molecule search:",
+      query,
+      mode,
+      threshold
+    );
 
     window.location.href = "/molecule?" + params.toString();
   }
@@ -369,8 +496,7 @@
     }
 
     /*
-     * Before redirecting, always fetch the latest structure from Ketcher.
-     * This keeps the URL query in sync with the drawn molecule.
+     * Always fetch latest SMILES from Ketcher before redirect.
      */
     var smilesFromKetcher = await getSmilesFromKetcherSilently();
 
@@ -388,6 +514,15 @@
         "warning"
       );
       return;
+    }
+
+    /*
+     * Image export is optional. Even if image export fails, search continues.
+     */
+    try {
+      await saveStructureImageForResultPage();
+    } catch (err) {
+      console.warn("CHEMSTRUCTURE: Image export failed, continuing search:", err);
     }
 
     redirectToMoleculeStructureSearch(query, mode);
@@ -460,6 +595,49 @@
     updateThresholdValueLabel();
   }
 
+  function renderActiveStructureImage() {
+    var container = document.getElementById("chemstructure-active-query-image");
+
+    if (!container) {
+      return;
+    }
+
+    try {
+      var image = window.sessionStorage.getItem(CHEMSTRUCTURE_QUERY_IMAGE_KEY);
+
+      if (!image) {
+        console.warn("CHEMSTRUCTURE: No query image found in sessionStorage.");
+        return;
+      }
+
+      container.style.display = "block";
+      container.innerHTML = "";
+
+      /*
+       * Inline SVG string.
+       */
+      if (image.indexOf("<svg") !== -1 || image.indexOf("<?xml") !== -1) {
+        container.innerHTML = image;
+        console.log("CHEMSTRUCTURE: Rendered query SVG image.");
+        return;
+      }
+
+      /*
+       * Data URL, usually PNG.
+       */
+      var img = document.createElement("img");
+      img.src = image;
+      img.alt = "Structure query";
+      img.className = "chemstructure-active-query-image__img";
+
+      container.appendChild(img);
+
+      console.log("CHEMSTRUCTURE: Rendered query image.");
+    } catch (err) {
+      console.warn("CHEMSTRUCTURE: Could not render query image:", err);
+    }
+  }
+
   document.addEventListener("DOMContentLoaded", function () {
     var searchBtn = document.getElementById("chemstructure-search");
     var clearBtn = document.getElementById("chemstructure-clear");
@@ -484,8 +662,22 @@
     bindThresholdEvents();
 
     /*
-     * Start auto-sync when the modal is opened.
-     * Ketcher may not be fully ready at page load.
+     * Render image on /molecule result page if available.
+     */
+    renderActiveStructureImage();
+
+    /*
+     * Start auto-sync only if Ketcher iframe exists.
+     */
+    startKetcherAutoSync();
+
+    /*
+     * Restore previous query/mode/threshold.
+     */
+    restoreLastStructureSearch();
+
+    /*
+     * When Bootstrap modal opens, Ketcher may become ready only then.
      */
     if (modal && window.jQuery) {
       window.jQuery(modal).on("shown.bs.modal", function () {
@@ -493,11 +685,5 @@
         restoreLastStructureSearch();
       });
     }
-
-    /*
-     * Fallback for full-page usage or when the iframe is already available.
-     */
-    startKetcherAutoSync();
-    restoreLastStructureSearch();
   });
 })();
