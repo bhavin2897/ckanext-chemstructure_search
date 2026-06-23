@@ -101,13 +101,12 @@
     </div>
 
       <div class="chemstructure-actions">
-      <button id="chemstructure-search" class="btn btn-primary">
-        Search
-      </button>
-
-      <button id="chemstructure-clear" class="btn btn-link">
-        Clear
-      </button>
+        <button id="chemstructure-clear" class="btn btn-link">
+          Clear
+        </button>
+        <button id="chemstructure-search" class="btn btn-primary chemstructure-search-right">
+          Search
+        </button>
       </div>
 
         <div id="chemstructure-message" class="chemstructure-message"></div>
@@ -252,15 +251,16 @@
   color: #777;
   font-size: 12px;
 }
-
   .chemstructure-actions {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 10px;
-    margin-top: 12px;
-    margin-bottom: 12px;
-  }
-
+      display: grid;
+      grid-gap: 1rem;
+      grid-template-columns: 50% 50%;
+      grid-template-areas: 'item item';
+      align-items: center;
+      width: 100%;
+      margin-top: 12px;
+      margin-bottom: 12px;
+    }
   .chemstructure-actions .btn {
     min-width: 100px;
   }
@@ -289,6 +289,11 @@
 
     .chemstructure-threshold-slider {
       width: 100%;
+    }
+
+    .chemstructure-search-right {
+      margin-left: auto;
+      margin-right: auto;
     }
   }
 </style>
