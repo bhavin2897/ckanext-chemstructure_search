@@ -1,8 +1,10 @@
 import base64
 import logging
+from io import BytesIO
 
 from rdkit import Chem, DataStructs
 from rdkit.Chem import rdFingerprintGenerator
+from rdkit.Chem import Draw
 
 import ckan.model as model
 from ckan.model import Package, PackageExtra
@@ -440,3 +442,60 @@ def chemstructure_rdkit_search(context, data_dict):
     )
 
     return result
+
+def chemstructure_render_query_image(context, data_dict):
+    """
+    Render a query molecule image from SMILES.
+
+    Endpoint:
+        /api/3/action/chemstructure_render_query_image
+
+    Input:
+        {
+          "smiles": "C1=CC=CC=C1"
+        }
+
+    Output:
+        {
+          "image_base64": "<base64 PNG>"
+        }
+    """
+
+    toolkit.check_access("package_search", context, data_dict)
+
+    query = (
+        data_dict.get("smiles")
+        or data_dict.get("structure_query")
+        or data_dict.get("query")
+    )
+
+    if not query:
+        raise toolkit.ValidationError({
+            "smiles": ["SMILES query is required."]
+        })
+
+    mol = Chem.MolFromSmiles(query)
+
+    if mol is None:
+        raise toolkit.ValidationError({
+            "smiles": ["Invalid SMILES. RDKit could not parse the query molecule."]
+        })
+
+    try:
+        image = Draw.MolToImage(mol, size=(260, 180))
+        buffer = BytesIO()
+        image.save(buffer, format="PNG")
+
+        image_base64 = base64.b64encode(buffer.getvalue()).decode("ascii")
+
+        return {
+            "image_base64": image_base64,
+            "format": "png",
+            "query": query,
+        }
+
+    except Exception:
+        log.exception("CHEMSTRUCTURE failed to render query image")
+        raise toolkit.ValidationError({
+            "image": ["Could not render query molecule image."]
+        })

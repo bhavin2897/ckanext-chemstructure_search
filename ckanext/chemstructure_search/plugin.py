@@ -5,7 +5,7 @@ from flask import request
 import ckan.plugins as plugins
 import ckan.plugins.toolkit as toolkit
 
-from ckanext.chemstructure_search.action import (chemstructure_exact_search, chemstructure_rdkit_search, run_structure_search)
+from ckanext.chemstructure_search.action import (chemstructure_exact_search, chemstructure_rdkit_search, run_structure_search, chemstructure_render_query_image)
 from ckanext.chemstructure_search.helpers import chemstructure_search_params
 
 from ckanext.chemstructure_search.views import get_blueprints
@@ -32,6 +32,7 @@ class ChemstructureSearchPlugin(plugins.SingletonPlugin):
         return {
             "chemstructure_exact_search": chemstructure_exact_search,
             "chemstructure_rdkit_search": chemstructure_rdkit_search,
+            "chemstructure_render_query_image" : chemstructure_render_query_image,
         }
 
     def get_helpers(self):

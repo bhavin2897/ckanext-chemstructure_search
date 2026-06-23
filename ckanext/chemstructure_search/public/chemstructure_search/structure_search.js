@@ -5,10 +5,25 @@
   var CHEMSTRUCTURE_LAST_QUERY_KEY = "chemstructure_last_query";
   var CHEMSTRUCTURE_LAST_MODE_KEY = "chemstructure_last_mode";
   var CHEMSTRUCTURE_LAST_THRESHOLD_KEY = "chemstructure_last_threshold";
-  var CHEMSTRUCTURE_QUERY_IMAGE_KEY = "chemstructure_query_image";
 
   var DEFAULT_MODE = "similarity";
   var DEFAULT_THRESHOLD = "0.25";
+
+  /*
+   * Expected backend endpoint.
+   *
+   * Preferred:
+   * Add a hidden input in the active-search snippet:
+   *
+   * <input
+   *   type="hidden"
+   *   id="chemstructure-render-image-url"
+   *   value="{{ h.url_for('chemstructure_search.render_query_image') }}">
+   *
+   * If that input is not present, JS falls back to this CKAN action URL.
+   */
+  var DEFAULT_RENDER_IMAGE_URL =
+    "/api/3/action/chemstructure_render_query_image";
 
   function showMessage(message, type) {
     var el = document.getElementById("chemstructure-message");
@@ -33,6 +48,18 @@
       .replace(/'/g, "&#039;");
   }
 
+  function isMolfileLike(value) {
+    if (!value) {
+      return false;
+    }
+
+    return (
+      value.indexOf("M  END") !== -1 ||
+      value.indexOf("V2000") !== -1 ||
+      value.indexOf("V3000") !== -1
+    );
+  }
+
   function normalizeThreshold(value) {
     var numberValue = parseFloat(value);
 
@@ -54,11 +81,7 @@
   async function getSmilesFromKetcherSilently() {
     var iframe = document.getElementById("ketcher-frame");
 
-    if (!iframe) {
-      return null;
-    }
-
-    if (!iframe.contentWindow || !iframe.contentWindow.ketcher) {
+    if (!iframe || !iframe.contentWindow || !iframe.contentWindow.ketcher) {
       return null;
     }
 
@@ -69,7 +92,16 @@
         return null;
       }
 
-      return smiles.trim();
+      smiles = smiles.trim();
+
+      if (isMolfileLike(smiles)) {
+        console.warn(
+          "CHEMSTRUCTURE: Ignoring molfile-like value returned as SMILES."
+        );
+        return null;
+      }
+
+      return smiles;
     } catch (err) {
       console.warn("CHEMSTRUCTURE: Could not read SMILES from Ketcher:", err);
       return null;
@@ -169,7 +201,9 @@
 
   function updateThresholdValueLabel() {
     var thresholdInput = document.getElementById("chemstructure-threshold");
-    var thresholdValue = document.getElementById("chemstructure-threshold-value");
+    var thresholdValue = document.getElementById(
+      "chemstructure-threshold-value"
+    );
 
     if (!thresholdInput || !thresholdValue) {
       return;
@@ -210,7 +244,6 @@
       window.localStorage.removeItem(CHEMSTRUCTURE_LAST_QUERY_KEY);
       window.localStorage.removeItem(CHEMSTRUCTURE_LAST_MODE_KEY);
       window.localStorage.removeItem(CHEMSTRUCTURE_LAST_THRESHOLD_KEY);
-      window.sessionStorage.removeItem(CHEMSTRUCTURE_QUERY_IMAGE_KEY);
     } catch (err) {
       console.warn("CHEMSTRUCTURE: Could not clear last search:", err);
     }
@@ -260,113 +293,6 @@
     } catch (err) {
       console.warn("CHEMSTRUCTURE: Could not read last search:", err);
       return null;
-    }
-  }
-
-  function normalizeKetcherImage(image) {
-    return new Promise(function (resolve) {
-      if (!image) {
-        resolve(null);
-        return;
-      }
-
-      /*
-       * Case 1: Ketcher returns SVG string or data URL string.
-       */
-      if (typeof image === "string") {
-        resolve(image);
-        return;
-      }
-
-      /*
-       * Case 2: Ketcher returns Blob.
-       */
-      if (window.Blob && image instanceof Blob) {
-        var reader = new FileReader();
-
-        reader.onload = function () {
-          resolve(reader.result);
-        };
-
-        reader.onerror = function () {
-          console.warn("CHEMSTRUCTURE: Could not read Ketcher image blob.");
-          resolve(null);
-        };
-
-        reader.readAsDataURL(image);
-        return;
-      }
-
-      console.warn("CHEMSTRUCTURE: Unsupported Ketcher image format:", image);
-      resolve(null);
-    });
-  }
-
-  async function getStructureImageFromKetcherSilently() {
-    var iframe = document.getElementById("ketcher-frame");
-
-    if (!iframe || !iframe.contentWindow || !iframe.contentWindow.ketcher) {
-      console.warn("CHEMSTRUCTURE: Ketcher iframe is not ready for image export.");
-      return null;
-    }
-
-    try {
-      var ketcher = iframe.contentWindow.ketcher;
-
-      /*
-       * Ketcher builds differ. Try SVG first, then PNG.
-       * Image export is optional. Search must still work if this fails.
-       */
-      if (typeof ketcher.generateImage === "function") {
-        try {
-          var svgImage = await ketcher.generateImage("svg");
-
-          if (svgImage) {
-            console.log("CHEMSTRUCTURE: Ketcher SVG image exported.");
-            return await normalizeKetcherImage(svgImage);
-          }
-        } catch (svgErr) {
-          console.warn("CHEMSTRUCTURE: SVG export failed, trying PNG:", svgErr);
-        }
-
-        try {
-          var pngImage = await ketcher.generateImage("png");
-
-          if (pngImage) {
-            console.log("CHEMSTRUCTURE: Ketcher PNG image exported.");
-            return await normalizeKetcherImage(pngImage);
-          }
-        } catch (pngErr) {
-          console.warn("CHEMSTRUCTURE: PNG export failed:", pngErr);
-        }
-      }
-
-      console.warn("CHEMSTRUCTURE: ketcher.generateImage is not available.");
-    } catch (err) {
-      console.warn("CHEMSTRUCTURE: Could not export Ketcher image:", err);
-    }
-
-    return null;
-  }
-
-  async function saveStructureImageForResultPage() {
-    try {
-      var image = await getStructureImageFromKetcherSilently();
-
-      if (!image) {
-        console.warn("CHEMSTRUCTURE: No query image was exported.");
-        window.sessionStorage.removeItem(CHEMSTRUCTURE_QUERY_IMAGE_KEY);
-        return;
-      }
-
-      window.sessionStorage.setItem(CHEMSTRUCTURE_QUERY_IMAGE_KEY, image);
-
-      console.log(
-        "CHEMSTRUCTURE: Query image saved for result page. Length:",
-        image.length
-      );
-    } catch (err) {
-      console.warn("CHEMSTRUCTURE: Could not save query image:", err);
     }
   }
 
@@ -452,7 +378,10 @@
           console.log("CHEMSTRUCTURE: Restored molecule in Ketcher:", smiles);
         }
       } catch (err) {
-        console.warn("CHEMSTRUCTURE: Could not restore molecule in Ketcher:", err);
+        console.warn(
+          "CHEMSTRUCTURE: Could not restore molecule in Ketcher:",
+          err
+        );
         window.clearInterval(timer);
       }
 
@@ -495,9 +424,6 @@
       return;
     }
 
-    /*
-     * Always fetch latest SMILES from Ketcher before redirect.
-     */
     var smilesFromKetcher = await getSmilesFromKetcherSilently();
 
     if (smilesFromKetcher) {
@@ -508,21 +434,12 @@
     var mode = modeOverride || getSelectedSearchMode();
     var query = input.value.trim();
 
-    if (!query) {
+    if (!query || isMolfileLike(query)) {
       showMessage(
-        "Please draw a structure in Ketcher or paste a SMILES/SMARTS query first.",
+        "Please draw a structure in Ketcher or paste a valid SMILES/SMARTS query first.",
         "warning"
       );
       return;
-    }
-
-    /*
-     * Image export is optional. Even if image export fails, search continues.
-     */
-    try {
-      await saveStructureImageForResultPage();
-    } catch (err) {
-      console.warn("CHEMSTRUCTURE: Image export failed, continuing search:", err);
     }
 
     redirectToMoleculeStructureSearch(query, mode);
@@ -595,46 +512,176 @@
     updateThresholdValueLabel();
   }
 
-  function renderActiveStructureImage() {
+  function getRenderImageUrl() {
+    var input = document.getElementById("chemstructure-render-image-url");
+
+    if (input && input.value) {
+      return input.value;
+    }
+
+    return DEFAULT_RENDER_IMAGE_URL;
+  }
+
+  function extractBase64ImageFromResponse(payload) {
+    /*
+     * Supported backend return formats:
+     *
+     * 1. Raw base64 string:
+     *    iVBORw0KGgo...
+     *
+     * 2. CKAN action JSON:
+     *    { success: true, result: "iVBORw0KGgo..." }
+     *
+     * 3. CKAN action JSON object:
+     *    { success: true, result: { image: "iVBORw0KGgo..." } }
+     *
+     * 4. Already complete data URL:
+     *    data:image/png;base64,iVBORw0KGgo...
+     */
+
+    if (!payload) {
+      return null;
+    }
+
+    if (typeof payload === "string") {
+      return payload;
+    }
+
+    if (payload.result) {
+      if (typeof payload.result === "string") {
+        return payload.result;
+      }
+
+      if (payload.result.image) {
+        return payload.result.image;
+      }
+
+      if (payload.result.image_base64) {
+        return payload.result.image_base64;
+      }
+
+      if (payload.result.png) {
+        return payload.result.png;
+      }
+
+      if (payload.result.svg) {
+        return payload.result.svg;
+      }
+    }
+
+    if (payload.image) {
+      return payload.image;
+    }
+
+    if (payload.image_base64) {
+      return payload.image_base64;
+    }
+
+    return null;
+  }
+
+  function setImageElementSource(img, imageValue) {
+    if (!img || !imageValue) {
+      return;
+    }
+
+    if (
+      imageValue.indexOf("data:image/") === 0 ||
+      imageValue.indexOf("<svg") !== -1 ||
+      imageValue.indexOf("<?xml") !== -1
+    ) {
+      if (imageValue.indexOf("<svg") !== -1 || imageValue.indexOf("<?xml") !== -1) {
+        var container = document.getElementById(
+          "chemstructure-active-query-image"
+        );
+
+        if (container) {
+          container.innerHTML = imageValue;
+          container.style.display = "block";
+        }
+
+        return;
+      }
+
+      img.src = imageValue;
+      return;
+    }
+
+    img.src = "data:image/png;base64," + imageValue;
+  }
+
+  async function renderActiveStructureImage() {
     var container = document.getElementById("chemstructure-active-query-image");
 
     if (!container) {
       return;
     }
 
-    try {
-      var image = window.sessionStorage.getItem(CHEMSTRUCTURE_QUERY_IMAGE_KEY);
+    var structureSearch = getStructureSearchFromUrl();
 
-      if (!image) {
-        console.warn("CHEMSTRUCTURE: No query image found in sessionStorage.");
-        return;
+    if (!structureSearch || !structureSearch.query) {
+      return;
+    }
+
+    var query = structureSearch.query;
+
+    container.style.display = "block";
+    container.innerHTML =
+      '<div class="chemstructure-active-query-image__loading">' +
+      "Rendering structure..." +
+      "</div>";
+
+    try {
+      var renderUrl = getRenderImageUrl();
+
+      var response = await fetch(renderUrl, {
+        method: "POST",
+        credentials: "same-origin",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          smiles: query,
+          structure_query: query,
+          query: query
+        })
+      });
+
+      if (!response.ok) {
+        throw new Error("Image render request failed: HTTP " + response.status);
       }
 
-      container.style.display = "block";
+      var contentType = response.headers.get("content-type") || "";
+      var imageValue = null;
+
+      if (contentType.indexOf("application/json") !== -1) {
+        var payload = await response.json();
+        imageValue = extractBase64ImageFromResponse(payload);
+      } else {
+        imageValue = await response.text();
+      }
+
+      if (!imageValue) {
+        throw new Error("Image render response did not contain image data.");
+      }
+
       container.innerHTML = "";
 
-      /*
-       * Inline SVG string.
-       */
-      if (image.indexOf("<svg") !== -1 || image.indexOf("<?xml") !== -1) {
-        container.innerHTML = image;
-        console.log("CHEMSTRUCTURE: Rendered query SVG image.");
-        return;
-      }
-
-      /*
-       * Data URL, usually PNG.
-       */
       var img = document.createElement("img");
-      img.src = image;
       img.alt = "Structure query";
       img.className = "chemstructure-active-query-image__img";
 
       container.appendChild(img);
+      setImageElementSource(img, imageValue);
 
-      console.log("CHEMSTRUCTURE: Rendered query image.");
+      console.log("CHEMSTRUCTURE: Rendered active structure image.");
     } catch (err) {
-      console.warn("CHEMSTRUCTURE: Could not render query image:", err);
+      console.warn("CHEMSTRUCTURE: Could not render active structure image:", err);
+
+      container.innerHTML =
+        '<div class="chemstructure-active-query-image__error">' +
+        "Image unavailable" +
+        "</div>";
     }
   }
 
@@ -662,7 +709,8 @@
     bindThresholdEvents();
 
     /*
-     * Render image on /molecule result page if available.
+     * Render active structure image on /molecule result page.
+     * This now comes from backend RDKit rendering, not from Ketcher.
      */
     renderActiveStructureImage();
 
