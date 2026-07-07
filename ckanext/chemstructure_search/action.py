@@ -254,8 +254,6 @@ def _load_molecule_packages_from_db():
     """
     Load active CKAN molecule packages and their SMILES/InChI extras directly
     from PostgreSQL.
-
-    This does not use Solr.
     """
 
     rows = (
@@ -538,7 +536,7 @@ def _run_structure_search_cartridge(
                 id,
                 name,
                 title
-            FROM molecule_rdkit
+            FROM rdkit
             WHERE
                 mol = mol_from_smiles(:query)
             LIMIT :rows
@@ -556,7 +554,7 @@ def _run_structure_search_cartridge(
                 id,
                 name,
                 title
-            FROM molecule_rdkit
+            FROM rdkit
             WHERE
                 mol @> mol_from_smiles(:query)
             LIMIT :rows
@@ -578,7 +576,7 @@ def _run_structure_search_cartridge(
                     mfp2,
                     morganbv_fp(mol_from_smiles(:query))
                 ) AS similarity
-            FROM molecule_rdkit
+            FROM rdkit
             WHERE
                 tanimoto_sml(
                     mfp2,
