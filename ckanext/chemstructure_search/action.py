@@ -1,6 +1,7 @@
 import base64
 import logging
 from io import BytesIO
+from sqlalchemy import text
 
 from rdkit import Chem, DataStructs
 from rdkit.Chem import rdFingerprintGenerator
@@ -18,6 +19,22 @@ log = logging.getLogger(__name__)
 _CANDIDATE_CACHE = None
 
 
+
+def _rdkit_cartridge_available():
+    try:
+        result = model.Session.execute(text("""
+            SELECT EXISTS(
+                SELECT 1
+                FROM pg_extension
+                WHERE extname='rdkit'
+            )
+        """))
+
+        return result.scalar()
+
+    except Exception:
+        return False
+
 def _first(value):
     if isinstance(value, list):
         return value[0] if value else None
@@ -25,6 +42,7 @@ def _first(value):
 
 
 def _mol_from_candidate(doc):
+    # 
     smiles = (
         _first(doc.get("smiles"))
         or _first(doc.get("extras_smiles"))
@@ -107,6 +125,8 @@ def chemstructure_exact_search(context, data_dict):
             raise toolkit.ValidationError({
                 "smarts": ["Invalid SMARTS. RDKit could not parse the query pattern."]
             })
+
+    log.debug(query_pattern)
 
     search_data = {
         "q": "*:*",
@@ -322,7 +342,7 @@ def _load_cached_structure_candidates(force_refresh=False):
 
     return _CANDIDATE_CACHE
 
-def run_structure_search(query, mode="similarity", threshold=0.25, rows=None):
+def _run_structure_search_python(query, mode="similarity", threshold=0.25, rows=None):
     """
     Reusable RDKit structure search.
 
@@ -499,3 +519,131 @@ def chemstructure_render_query_image(context, data_dict):
         raise toolkit.ValidationError({
             "image": ["Could not render query molecule image."]
         })
+
+
+def _run_structure_search_cartridge(
+    query,
+    mode,
+    threshold,
+    rows,
+):
+    """
+    PostgreSQL RDKit cartridge backend.
+    """
+
+    if mode == "exact":
+
+        sql = text("""
+            SELECT
+                id,
+                name,
+                title
+            FROM molecule_rdkit
+            WHERE
+                mol = mol_from_smiles(:query)
+            LIMIT :rows
+        """)
+
+        params = {
+            "query": query,
+            "rows": rows,
+        }
+
+    elif mode == "substructure":
+
+        sql = text("""
+            SELECT
+                id,
+                name,
+                title
+            FROM molecule_rdkit
+            WHERE
+                mol @> mol_from_smiles(:query)
+            LIMIT :rows
+        """)
+
+        params = {
+            "query": query,
+            "rows": rows,
+        }
+
+    elif mode == "similarity":
+
+        sql = text("""
+            SELECT
+                id,
+                name,
+                title,
+                tanimoto_sml(
+                    mfp2,
+                    morganbv_fp(mol_from_smiles(:query))
+                ) AS similarity
+            FROM molecule_rdkit
+            WHERE
+                tanimoto_sml(
+                    mfp2,
+                    morganbv_fp(mol_from_smiles(:query))
+                ) >= :threshold
+            ORDER BY similarity DESC
+            LIMIT :rows
+        """)
+
+        params = {
+            "query": query,
+            "threshold": threshold,
+            "rows": rows,
+        }
+
+    else:
+        raise toolkit.ValidationError({
+            "mode": ["Unsupported search mode."]
+        })
+
+    rows = model.Session.execute(sql, params).fetchall()
+
+    return {
+        "count": len(rows),
+        "results": [dict(r) for r in rows],
+        "source": "postgresql_cartridge",
+        "solr_used": False,
+    }
+
+
+def run_structure_search(
+    query,
+    mode="similarity",
+    threshold=0.25,
+    rows=None,
+):
+    """
+    Automatically use PostgreSQL RDKit cartridge if available,
+    otherwise fall back to Python RDKit.
+    """
+
+    if _rdkit_cartridge_available():
+
+        try:
+
+            log.info(
+                "Using PostgreSQL RDKit cartridge."
+            )
+
+            return _run_structure_search_cartridge(
+                query=query,
+                mode=mode,
+                threshold=threshold,
+                rows=rows,
+            )
+
+        except Exception:
+
+            log.exception(
+                "RDKit cartridge failed. Falling back to Python."
+            )
+
+    return _run_structure_search_python(
+        query=query,
+        mode=mode,
+        threshold=threshold,
+        rows=rows,
+    )
