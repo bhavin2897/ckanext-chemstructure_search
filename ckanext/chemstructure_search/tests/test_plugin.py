@@ -1,53 +1,422 @@
-"""
-Tests for plugin.py.
+import pytest
+from flask import Flask
 
-Tests are written using the pytest library (https://docs.pytest.org), and you
-should read the testing guidelines in the CKAN docs:
-https://docs.ckan.org/en/2.9/contributing/testing.html
+import ckan.plugins.toolkit as toolkit
 
-To write tests for your extension you should install the pytest-ckan package:
-
-    pip install pytest-ckan
-
-This will allow you to use CKAN specific fixtures on your tests.
-
-For instance, if your test involves database access you can use `clean_db` to
-reset the database:
-
-    import pytest
-
-    from ckan.tests import factories
-
-    @pytest.mark.usefixtures("clean_db")
-    def test_some_action():
-
-        dataset = factories.Dataset()
-
-        # ...
-
-For functional tests that involve requests to the application, you can use the
-`app` fixture:
-
-    from ckan.plugins import toolkit
-
-    def test_some_endpoint(app):
-
-        url = toolkit.url_for('myblueprint.some_endpoint')
-
-        response = app.get(url)
-
-        assert response.status_code == 200
-
-
-To temporary patch the CKAN configuration for the duration of a test you can use:
-
-    import pytest
-
-    @pytest.mark.ckan_config("ckanext.myext.some_key", "some_value")
-    def test_some_action():
-        pass
-"""
+import ckanext.chemstructure_search.action as action
 import ckanext.chemstructure_search.plugin as plugin
 
-def test_plugin():
-    pass
+
+class FakeResult(object):
+    def __init__(self, scalar_value=None, one=None, all_rows=None):
+        self.scalar_value = scalar_value
+        self.one = one
+        self.all_rows = all_rows or []
+
+    def scalar(self):
+        return self.scalar_value
+
+    def fetchone(self):
+        return self.one
+
+    def fetchall(self):
+        return self.all_rows
+
+
+class CapturingSession(object):
+    def __init__(self, rows=None, fail_search=False):
+        self.rows = rows or []
+        self.fail_search = fail_search
+        self.calls = []
+
+    def execute(self, sql, params=None):
+        sql_text = str(sql)
+        self.calls.append((sql_text, params or {}))
+
+        if "set_config('rdkit.tanimoto_threshold'" in sql_text:
+            return FakeResult(one={"set_config": params["threshold"]})
+
+        if "query_canonical_smiles" in sql_text:
+            return FakeResult(one={"query_canonical_smiles": "CCO"})
+
+        if "TRUE AS valid" in sql_text:
+            return FakeResult(one={"valid": True})
+
+        if self.fail_search:
+            raise RuntimeError("database exploded")
+
+        return FakeResult(all_rows=self.rows)
+
+
+def metadata(
+    mapping="inchi_key",
+    operators=None,
+    package_extra_has_state=True,
+):
+    if operators is None:
+        operators = {
+            "threshold": True,
+            "knn": True,
+        }
+
+    return {
+        "mapping": mapping,
+        "functions": {
+            "mol_from_smiles": '"public"."mol_from_smiles"',
+            "mol_to_smiles": '"public"."mol_to_smiles"',
+            "morganbv_fp": '"public"."morganbv_fp"',
+            "tanimoto_sml": '"public"."tanimoto_sml"',
+        },
+        "smarts_function": '"public"."qmol_from_smarts"',
+        "package_extra_has_state": package_extra_has_state,
+        "similarity_operators": operators,
+    }
+
+
+def run_with_captured_sql(
+    monkeypatch,
+    mode,
+    rows=25,
+    result_rows=None,
+    meta=None,
+):
+    session = CapturingSession(rows=result_rows or [{
+        "id": "pkg-1",
+        "name": "ethanol",
+        "title": "Ethanol",
+        "canonical_smiles": "CCO",
+        "similarity": 0.91,
+    }])
+
+    monkeypatch.setattr(action.model, "Session", session)
+    monkeypatch.setattr(
+        action,
+        "_inspect_rdkit_schema",
+        lambda requested_mode: meta or metadata(),
+    )
+
+    result = action.run_structure_search(
+        query="CCO" if mode != "smarts" else "[#6]",
+        mode=mode,
+        threshold=0.7,
+        rows=rows,
+    )
+
+    search_sql, params = session.calls[-1]
+    return result, search_sql, params, session.calls
+
+
+def assert_common_package_mapping_sql(sql):
+    assert "FROM rdk.molecules m" in sql
+    assert "JOIN package_extra pe" in sql
+    assert "pe.key = 'inchi_key'" in sql
+    assert "pe.state = 'active'" in sql
+    assert 'JOIN "package" p' in sql
+    assert "p.type = 'molecule'" in sql
+    assert "p.state = 'active'" in sql
+    assert "DISTINCT ON (p.id)" in sql
+    assert "FROM rdkit" not in sql
+    assert "FROM rdk.mols" not in sql
+
+
+def test_exact_matching_uses_cartridge_operator(monkeypatch):
+    result, sql, params, _calls = run_with_captured_sql(monkeypatch, "exact")
+
+    assert "m.molecule @= q.molecule" in sql
+    assert_common_package_mapping_sql(sql)
+    assert result["source"] == "postgresql_cartridge"
+    assert result["solr_used"] is False
+    assert result["query_canonical_smiles"] == "CCO"
+    assert result["results"][0]["name"] == "ethanol"
+    assert result["results"][0]["mode"] == "exact"
+    assert "similarity" not in result["results"][0]
+    assert params["query"] == "CCO"
+    assert params["rows"] == 25
+
+
+def test_smiles_substructure_matching_uses_contains_operator(monkeypatch):
+    _result, sql, _params, _calls = run_with_captured_sql(
+        monkeypatch,
+        "substructure",
+    )
+
+    assert "m.molecule @> q.molecule" in sql
+    assert_common_package_mapping_sql(sql)
+
+
+def test_smarts_matching_uses_confirmed_smarts_function(monkeypatch):
+    result, sql, params, _calls = run_with_captured_sql(monkeypatch, "smarts")
+
+    assert '"public"."qmol_from_smarts"(:query)' in sql
+    assert "m.molecule @> q.pattern" in sql
+    assert result["query_canonical_smiles"] is None
+    assert params["query"] == "[#6]"
+
+
+def test_similarity_threshold_filtering_ordering_and_fingerprint_join(
+    monkeypatch,
+):
+    result, sql, params, calls = run_with_captured_sql(
+        monkeypatch,
+        "similarity",
+    )
+
+    assert "JOIN rdk.fingerprints f" in sql
+    assert "ON f.molecule_id = m.molecule_id" in sql
+    assert '"public"."morganbv_fp"(molecule)' in sql
+    assert (
+        '"public"."tanimoto_sml"(q.query_fingerprint, f.mfp2) '
+        ">= :threshold"
+    ) in sql
+    assert "f.mfp2 % q.query_fingerprint" in sql
+    assert "ORDER BY f.mfp2 <%> q.query_fingerprint" in sql
+    assert "ORDER BY similarity DESC NULLS LAST, name" in sql
+    assert params["threshold"] == 0.7
+    assert result["threshold"] == 0.7
+    assert result["results"][0]["similarity"] == 0.91
+    assert any(
+        "set_config('rdkit.tanimoto_threshold'" in call[0]
+        for call in calls
+    )
+
+
+def test_similarity_omits_gist_operators_when_not_supported(monkeypatch):
+    _result, sql, _params, _calls = run_with_captured_sql(
+        monkeypatch,
+        "similarity",
+        meta=metadata(operators={"threshold": False, "knn": False}),
+    )
+
+    assert "f.mfp2 % q.query_fingerprint" not in sql
+    assert "f.mfp2 <%> q.query_fingerprint" not in sql
+    assert (
+        '"public"."tanimoto_sml"(q.query_fingerprint, f.mfp2) '
+        ">= :threshold"
+    ) in sql
+
+
+def test_direct_package_mapping_when_molecule_id_matches_package_id(
+    monkeypatch,
+):
+    _result, sql, _params, _calls = run_with_captured_sql(
+        monkeypatch,
+        "exact",
+        meta=metadata(mapping="package_id"),
+    )
+
+    assert 'JOIN "package" p' in sql
+    assert "p.id::text = h.molecule_id::text" in sql
+    assert "JOIN package_extra pe" not in sql
+
+
+def test_rows_none_omits_limit_clause(monkeypatch):
+    _result, sql, params, _calls = run_with_captured_sql(
+        monkeypatch,
+        "exact",
+        rows=None,
+    )
+
+    assert "LIMIT" not in sql
+    assert "rows" not in params
+
+
+def test_numeric_result_limits_are_bound(monkeypatch):
+    _result, sql, params, _calls = run_with_captured_sql(
+        monkeypatch,
+        "exact",
+        rows="7",
+    )
+
+    assert "LIMIT :rows" in sql
+    assert params["rows"] == 7
+
+
+def test_invalid_smiles_raises_validation_error(monkeypatch):
+    session = CapturingSession()
+
+    def invalid_execute(sql, params=None):
+        sql_text = str(sql)
+        session.calls.append((sql_text, params or {}))
+        if "query_canonical_smiles" in sql_text:
+            return FakeResult(one=None)
+        return FakeResult(all_rows=[])
+
+    session.execute = invalid_execute
+    monkeypatch.setattr(action.model, "Session", session)
+    monkeypatch.setattr(
+        action,
+        "_inspect_rdkit_schema",
+        lambda mode: metadata(),
+    )
+
+    with pytest.raises(toolkit.ValidationError):
+        action.run_structure_search("not-smiles", mode="exact", rows=10)
+
+
+def test_invalid_smarts_raises_validation_error(monkeypatch):
+    session = CapturingSession()
+
+    def invalid_execute(sql, params=None):
+        sql_text = str(sql)
+        session.calls.append((sql_text, params or {}))
+        if "TRUE AS valid" in sql_text:
+            return FakeResult(one=None)
+        return FakeResult(all_rows=[])
+
+    session.execute = invalid_execute
+    monkeypatch.setattr(action.model, "Session", session)
+    monkeypatch.setattr(
+        action,
+        "_inspect_rdkit_schema",
+        lambda mode: metadata(),
+    )
+
+    with pytest.raises(toolkit.ValidationError):
+        action.run_structure_search("[", mode="smarts", rows=10)
+
+
+def test_unsupported_mode_raises_validation_error():
+    with pytest.raises(toolkit.ValidationError):
+        action.run_structure_search("CCO", mode="contains")
+
+
+@pytest.mark.parametrize("threshold", ["bad", -0.1, 1.1])
+def test_invalid_thresholds_raise_validation_error(threshold):
+    with pytest.raises(toolkit.ValidationError):
+        action.run_structure_search(
+            "CCO",
+            mode="similarity",
+            threshold=threshold,
+        )
+
+
+@pytest.mark.parametrize("rows", ["bad", -1])
+def test_invalid_rows_raise_validation_error(rows):
+    with pytest.raises(toolkit.ValidationError):
+        action.run_structure_search("CCO", mode="exact", rows=rows)
+
+
+def test_missing_rdkit_extension_raises_validation_error(monkeypatch):
+    monkeypatch.setattr(action, "_scalar", lambda sql, params=None: False)
+
+    with pytest.raises(toolkit.ValidationError):
+        action._inspect_rdkit_schema("exact")
+
+
+def test_missing_rdk_molecules_raises_validation_error(monkeypatch):
+    monkeypatch.setattr(action, "_scalar", lambda sql, params=None: True)
+    monkeypatch.setattr(action, "_fetch_table_names", lambda: {
+        "molecules": None,
+        "fingerprints": "rdk.fingerprints",
+        "package_table": "package",
+        "package_extra_table": "package_extra",
+    })
+
+    with pytest.raises(toolkit.ValidationError):
+        action._inspect_rdkit_schema("exact")
+
+
+def test_missing_rdk_fingerprints_raises_for_similarity(monkeypatch):
+    monkeypatch.setattr(action, "_scalar", lambda sql, params=None: True)
+    monkeypatch.setattr(action, "_fetch_table_names", lambda: {
+        "molecules": "rdk.molecules",
+        "fingerprints": None,
+        "package_table": "package",
+        "package_extra_table": "package_extra",
+    })
+
+    with pytest.raises(toolkit.ValidationError):
+        action._inspect_rdkit_schema("similarity")
+
+
+def test_mapping_falls_back_to_inchi_key_for_non_string_molecule_id():
+    columns = {
+        ("rdk", "molecules"): {
+            "molecule_id": "integer",
+            "molecule": "USER-DEFINED",
+            "canonical_smiles": "text",
+            "inchi_key": "text",
+        },
+        ("public", "package"): {
+            "id": "text",
+            "name": "text",
+            "title": "text",
+            "type": "text",
+            "state": "text",
+        },
+        ("public", "package_extra"): {
+            "package_id": "text",
+            "key": "text",
+            "value": "text",
+            "state": "text",
+        },
+    }
+
+    assert action._select_package_mapping(columns) == "inchi_key"
+
+
+def test_mapping_raises_when_no_confirmed_join_exists():
+    columns = {
+        ("rdk", "molecules"): {
+            "molecule_id": "integer",
+            "molecule": "USER-DEFINED",
+            "canonical_smiles": "text",
+        },
+        ("public", "package"): {
+            "id": "text",
+            "name": "text",
+            "title": "text",
+            "type": "text",
+            "state": "text",
+        },
+        ("public", "package_extra"): {
+            "package_id": "text",
+            "key": "text",
+            "value": "text",
+        },
+    }
+
+    with pytest.raises(toolkit.ValidationError):
+        action._select_package_mapping(columns)
+
+
+def test_sql_failure_has_no_python_fallback(monkeypatch):
+    session = CapturingSession(fail_search=True)
+
+    monkeypatch.setattr(action.model, "Session", session)
+    monkeypatch.setattr(
+        action,
+        "_inspect_rdkit_schema",
+        lambda mode: metadata(),
+    )
+
+    assert not hasattr(action, "_run_structure_search_python")
+
+    with pytest.raises(toolkit.ValidationError):
+        action.run_structure_search("CCO", mode="exact", rows=10)
+
+
+def test_before_search_generates_existing_solr_package_name_filter(
+    monkeypatch,
+):
+    app = Flask(__name__)
+    search_plugin = plugin.ChemstructureSearchPlugin()
+
+    monkeypatch.setattr(plugin, "run_structure_search", lambda **kwargs: {
+        "results": [
+            {"name": "ethanol"},
+            {"name": "benzene"},
+        ],
+    })
+
+    with app.test_request_context(
+        "/molecule?structure_query=CCO&structure_mode=exact&threshold=0.7"
+    ):
+        params = search_plugin.before_search({
+            "fq": 'owner_org:"org-1" structure_query:CCO threshold:0.7',
+        })
+
+    assert "{!terms f=name}ethanol,benzene" in params["fq"]
+    assert "owner_org" in params["fq"]
+    assert "structure_query:" not in params["fq"]
+    assert "threshold:" not in params["fq"]

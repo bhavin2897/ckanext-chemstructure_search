@@ -1,441 +1,883 @@
 import base64
 import logging
+import re
 from io import BytesIO
+
 from sqlalchemy import text
 
-from rdkit import Chem, DataStructs
-from rdkit.Chem import rdFingerprintGenerator
+from rdkit import Chem
 from rdkit.Chem import Draw
+from rdkit import RDLogger
 
 import ckan.model as model
-from ckan.model import Package, PackageExtra
 import ckan.plugins.toolkit as toolkit
 
-from rdkit import RDLogger
 
 RDLogger.DisableLog("rdApp.error")
 
 log = logging.getLogger(__name__)
-_CANDIDATE_CACHE = None
+
+VALID_SEARCH_MODES = ("exact", "substructure", "smarts", "similarity")
+DEFAULT_ROWS = 50
+DEFAULT_THRESHOLD = 0.25
+
+RDK_MOLECULES = "rdk.molecules"
+RDK_FINGERPRINTS = "rdk.fingerprints"
+PACKAGE_TABLE = "public.package"
+PACKAGE_EXTRA_TABLE = "public.package_extra"
+
+STRING_LIKE_COLUMN_TYPES = set([
+    "text",
+    "character varying",
+    "character",
+    "uuid",
+])
 
 
+def _validation_error(field, message):
+    raise toolkit.ValidationError({
+        field: [message]
+    })
 
-def _rdkit_cartridge_available():
+
+def _row_mapping(row):
+    if isinstance(row, dict):
+        return row
+
+    mapping = getattr(row, "_mapping", None)
+    if mapping is not None:
+        return dict(mapping)
+
+    return dict(row)
+
+
+def _scalar(sql, params=None):
+    return model.Session.execute(text(sql), params or {}).scalar()
+
+
+def _quote_identifier(value):
+    if not re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", value or ""):
+        _validation_error(
+            "rdkit",
+            "RDKit function lookup returned an unsafe SQL identifier.",
+        )
+
+    return '"{}"'.format(value)
+
+
+def _qualified_function(schema, name):
+    return "{}.{}".format(_quote_identifier(schema), _quote_identifier(name))
+
+
+def _validate_mode(mode):
+    mode = mode or "similarity"
+
+    if mode not in VALID_SEARCH_MODES:
+        _validation_error(
+            "mode",
+            "Mode must be one of: exact, substructure, smarts, similarity.",
+        )
+
+    return mode
+
+
+def _validate_threshold(threshold):
+    if threshold is None or threshold == "":
+        threshold = DEFAULT_THRESHOLD
+
     try:
-        result = model.Session.execute(text("""
+        threshold = float(threshold)
+    except (TypeError, ValueError):
+        _validation_error(
+            "threshold",
+            "Threshold must be a number from 0.0 to 1.0.",
+        )
+
+    if threshold < 0.0 or threshold > 1.0:
+        _validation_error(
+            "threshold",
+            "Threshold must be a number from 0.0 to 1.0.",
+        )
+
+    return threshold
+
+
+def _validate_rows(rows):
+    if rows is None or rows == "":
+        return None
+
+    try:
+        rows = int(rows)
+    except (TypeError, ValueError):
+        _validation_error("rows", "Rows must be a non-negative integer.")
+
+    if rows < 0:
+        _validation_error("rows", "Rows must be a non-negative integer.")
+
+    return rows
+
+
+def _validate_query(query):
+    if not query:
+        _validation_error("query", "SMILES or SMARTS query is required.")
+
+    return query
+
+
+def _fetch_table_names():
+    row = model.Session.execute(text("""
+        SELECT
+            to_regclass(:molecules) AS molecules,
+            to_regclass(:fingerprints) AS fingerprints,
+            to_regclass(:package_table) AS package_table,
+            to_regclass(:package_extra_table) AS package_extra_table
+    """), {
+        "molecules": RDK_MOLECULES,
+        "fingerprints": RDK_FINGERPRINTS,
+        "package_table": PACKAGE_TABLE,
+        "package_extra_table": PACKAGE_EXTRA_TABLE,
+    }).fetchone()
+
+    return _row_mapping(row)
+
+
+def _fetch_columns():
+    rows = model.Session.execute(text("""
+        SELECT
+            table_schema,
+            table_name,
+            column_name,
+            data_type
+        FROM information_schema.columns
+        WHERE (table_schema, table_name) IN (
+            ('rdk', 'molecules'),
+            ('rdk', 'fingerprints'),
+            ('public', 'package'),
+            ('public', 'package_extra')
+        )
+    """)).fetchall()
+
+    columns = {}
+
+    for row in rows:
+        item = _row_mapping(row)
+        key = (item["table_schema"], item["table_name"])
+        columns.setdefault(key, {})[item["column_name"]] = item["data_type"]
+
+    return columns
+
+
+def _fetch_function_refs():
+    rows = model.Session.execute(text("""
+        SELECT
+            n.nspname AS schema_name,
+            p.proname AS function_name
+        FROM pg_catalog.pg_proc p
+        JOIN pg_catalog.pg_namespace n
+          ON n.oid = p.pronamespace
+        WHERE p.proname IN (
+            'mol_from_smiles',
+            'mol_to_smiles',
+            'qmol_from_smarts',
+            'mol_from_smarts',
+            'morganbv_fp',
+            'tanimoto_sml'
+        )
+        ORDER BY
+            CASE p.proname
+                WHEN 'qmol_from_smarts' THEN 0
+                WHEN 'mol_from_smarts' THEN 1
+                ELSE 2
+            END,
+            n.nspname
+    """)).fetchall()
+
+    functions = {}
+
+    for row in rows:
+        item = _row_mapping(row)
+        name = item["function_name"]
+
+        if name not in functions:
+            functions[name] = _qualified_function(
+                item["schema_name"],
+                item["function_name"],
+            )
+
+    return functions
+
+
+def _fetch_similarity_operator_support():
+    rows = model.Session.execute(text("""
+        SELECT DISTINCT o.oprname
+        FROM pg_catalog.pg_operator o
+        WHERE o.oprname IN ('%', '<%>')
+          AND (
+            pg_catalog.format_type(o.oprleft, NULL) ILIKE '%bfp%'
+            OR pg_catalog.format_type(o.oprright, NULL) ILIKE '%bfp%'
+            OR pg_catalog.format_type(o.oprleft, NULL) ILIKE '%mfp%'
+            OR pg_catalog.format_type(o.oprright, NULL) ILIKE '%mfp%'
+          )
+    """)).fetchall()
+
+    operators = set()
+
+    for row in rows:
+        item = _row_mapping(row)
+        operators.add(item["oprname"])
+
+    return {
+        "threshold": "%" in operators,
+        "knn": "<%>" in operators,
+    }
+
+
+def _require_columns(columns, table_key, required, error_field):
+    table_columns = columns.get(table_key, {})
+    missing = [column for column in required if column not in table_columns]
+
+    if missing:
+        _validation_error(
+            error_field,
+            "Missing required columns on {}.{}: {}.".format(
+                table_key[0],
+                table_key[1],
+                ", ".join(sorted(missing)),
+            ),
+        )
+
+
+def _column_type(columns, table_key, column):
+    return columns.get(table_key, {}).get(column)
+
+
+def _direct_mapping_available(columns):
+    molecule_id_type = _column_type(
+        columns,
+        ("rdk", "molecules"),
+        "molecule_id",
+    )
+    package_id_type = _column_type(columns, ("public", "package"), "id")
+
+    if not molecule_id_type or not package_id_type:
+        return False
+
+    if molecule_id_type == package_id_type:
+        return True
+
+    return molecule_id_type in STRING_LIKE_COLUMN_TYPES and (
+        package_id_type in STRING_LIKE_COLUMN_TYPES
+    )
+
+
+def _select_package_mapping(columns):
+    if _direct_mapping_available(columns):
+        return "package_id"
+
+    _require_columns(
+        columns,
+        ("public", "package_extra"),
+        ("package_id", "key", "value"),
+        "schema",
+    )
+
+    if "inchi_key" not in columns.get(("rdk", "molecules"), {}):
+        _validation_error(
+            "schema",
+            "Cannot map RDKit molecules to CKAN packages: no compatible "
+            "molecule_id/package.id mapping and rdk.molecules.inchi_key "
+            "is missing.",
+        )
+
+    return "inchi_key"
+
+
+def _inspect_rdkit_schema(mode):
+    try:
+        rdkit_available = _scalar("""
             SELECT EXISTS(
                 SELECT 1
                 FROM pg_extension
-                WHERE extname='rdkit'
+                WHERE extname = 'rdkit'
             )
-        """))
+        """)
 
-        return result.scalar()
+        if not rdkit_available:
+            _validation_error(
+                "rdkit",
+                "PostgreSQL RDKit extension is not installed in this "
+                "database.",
+            )
 
-    except Exception:
-        return False
+        tables = _fetch_table_names()
 
-def _first(value):
-    if isinstance(value, list):
-        return value[0] if value else None
-    return value
+        if not tables.get("molecules"):
+            _validation_error(
+                "schema",
+                "Required table rdk.molecules is unavailable.",
+            )
 
+        if not tables.get("package_table"):
+            _validation_error(
+                "schema",
+                "Required CKAN table public.package is unavailable.",
+            )
 
-def _mol_from_candidate(doc):
-    # 
-    smiles = (
-        _first(doc.get("smiles"))
-        or _first(doc.get("extras_smiles"))
-    )
+        if not tables.get("package_extra_table"):
+            _validation_error(
+                "schema",
+                "Required CKAN table public.package_extra is unavailable.",
+            )
 
-    inchi = (
-        _first(doc.get("inchi"))
-        or _first(doc.get("extras_inchi"))
-    )
+        if mode == "similarity" and not tables.get("fingerprints"):
+            _validation_error(
+                "fingerprints",
+                "Required table rdk.fingerprints is unavailable for "
+                "similarity search.",
+            )
 
-    if smiles:
-        mol = Chem.MolFromSmiles(smiles)
-        if mol is not None:
-            return mol, smiles, "smiles"
+        columns = _fetch_columns()
 
-    if inchi:
-        mol = Chem.MolFromInchi(inchi)
-        if mol is not None:
-            return mol, inchi, "inchi"
+        _require_columns(
+            columns,
+            ("rdk", "molecules"),
+            ("molecule_id", "molecule", "canonical_smiles"),
+            "schema",
+        )
+        _require_columns(
+            columns,
+            ("public", "package"),
+            ("id", "name", "title", "type", "state"),
+            "schema",
+        )
 
-    return None, None, None
+        if mode == "similarity":
+            _require_columns(
+                columns,
+                ("rdk", "fingerprints"),
+                ("molecule_id", "mfp2"),
+                "fingerprints",
+            )
 
+        mapping = _select_package_mapping(columns)
+        functions = _fetch_function_refs()
 
-def _canonical_smiles_from_query(smiles):
-    mol = Chem.MolFromSmiles(smiles)
+        required_functions = ["mol_from_smiles", "mol_to_smiles"]
 
-    if mol is None:
-        raise toolkit.ValidationError({
-            "smiles": ["Invalid SMILES. RDKit could not parse the query molecule."]
-        })
+        if mode == "similarity":
+            required_functions.extend(["morganbv_fp", "tanimoto_sml"])
 
-    return Chem.MolToSmiles(mol, canonical=True), mol
+        missing_functions = [
+            function_name
+            for function_name in required_functions
+            if function_name not in functions
+        ]
 
+        if missing_functions:
+            _validation_error(
+                "rdkit",
+                "Missing required RDKit cartridge functions: {}.".format(
+                    ", ".join(sorted(missing_functions)),
+                ),
+            )
 
-def chemstructure_exact_search(context, data_dict):
-    """
-    Basic CKAN action for molecule structure search.
+        smarts_function = None
 
-    Endpoint:
-        /api/3/action/chemstructure_exact_search
+        if mode == "smarts":
+            smarts_function = functions.get("qmol_from_smarts") or (
+                functions.get("mol_from_smarts")
+            )
 
-    Input:
-        {
-          "smiles": "CCO",
-          "mode": "exact",
-          "rows": 50
+            if not smarts_function:
+                _validation_error(
+                    "rdkit",
+                    "No SMARTS-compatible RDKit cartridge function is "
+                    "installed.",
+                )
+
+        return {
+            "columns": columns,
+            "mapping": mapping,
+            "functions": functions,
+            "smarts_function": smarts_function,
+            "package_extra_has_state": (
+                "state" in columns.get(("public", "package_extra"), {})
+            ),
+            "similarity_operators": _fetch_similarity_operator_support(),
         }
 
-    Modes:
-        exact  - canonical SMILES equality
-        smarts - SMARTS substructure match
-    """
+    except toolkit.ValidationError:
+        raise
+    except Exception as error:
+        log.exception(
+            "CHEMSTRUCTURE failed to inspect PostgreSQL RDKit schema"
+        )
+        _validation_error(
+            "database",
+            "Could not inspect PostgreSQL RDKit schema: {}.".format(error),
+        )
 
-    toolkit.check_access("package_search", context, data_dict)
 
-    query = data_dict.get("smiles") or data_dict.get("query")
-    mode = data_dict.get("mode", "exact")
-    rows = int(data_dict.get("rows", 50))
+def _validate_smiles_query_in_database(query, functions):
+    sql = text("""
+        WITH query_molecule AS (
+            SELECT {mol_from_smiles}(:query) AS molecule
+        )
+        SELECT {mol_to_smiles}(molecule) AS query_canonical_smiles
+        FROM query_molecule
+        WHERE molecule IS NOT NULL
+    """.format(
+        mol_from_smiles=functions["mol_from_smiles"],
+        mol_to_smiles=functions["mol_to_smiles"],
+    ))
 
-    if not query:
-        raise toolkit.ValidationError({
-            "smiles": ["SMILES or SMARTS query is required."]
-        })
+    try:
+        row = model.Session.execute(sql, {"query": query}).fetchone()
+    except Exception as error:
+        log.exception("CHEMSTRUCTURE invalid SMILES query")
+        _validation_error(
+            "smiles",
+            "Invalid SMILES. PostgreSQL RDKit could not parse the query: "
+            "{}.".format(error),
+        )
 
-    if mode not in ("exact", "smarts"):
-        raise toolkit.ValidationError({
-            "mode": ["Mode must be either 'exact' or 'smarts'."]
-        })
+    if not row:
+        _validation_error(
+            "smiles",
+            "Invalid SMILES. PostgreSQL RDKit could not parse the query.",
+        )
 
-    query_canon = None
-    query_mol = None
-    query_pattern = None
+    return _row_mapping(row).get("query_canonical_smiles")
 
+
+def _validate_smarts_query_in_database(query, smarts_function):
+    sql = text("""
+        WITH query_pattern AS (
+            SELECT {smarts_function}(:query) AS pattern
+        )
+        SELECT TRUE AS valid
+        FROM query_pattern
+        WHERE pattern IS NOT NULL
+    """.format(smarts_function=smarts_function))
+
+    try:
+        row = model.Session.execute(sql, {"query": query}).fetchone()
+    except Exception as error:
+        log.exception("CHEMSTRUCTURE invalid SMARTS query")
+        _validation_error(
+            "smarts",
+            "Invalid SMARTS. PostgreSQL RDKit could not parse the query: "
+            "{}.".format(error),
+        )
+
+    if not row:
+        _validation_error(
+            "smarts",
+            "Invalid SMARTS. PostgreSQL RDKit could not parse the query.",
+        )
+
+    return None
+
+
+def _validate_structure_query_in_database(query, mode, metadata):
+    if mode == "smarts":
+        return _validate_smarts_query_in_database(
+            query,
+            metadata["smarts_function"],
+        )
+
+    return _validate_smiles_query_in_database(query, metadata["functions"])
+
+
+def _package_join_sql(mapping, package_extra_has_state):
+    if mapping == "package_id":
+        return """
+            JOIN "package" p
+              ON p.id::text = h.molecule_id::text
+        """
+
+    package_extra_state_filter = ""
+
+    if package_extra_has_state:
+        package_extra_state_filter = "AND pe.state = 'active'"
+
+    return """
+        JOIN package_extra pe
+          ON pe.value = h.inchi_key
+         AND pe.key = 'inchi_key'
+         {package_extra_state_filter}
+        JOIN "package" p
+          ON p.id = pe.package_id
+    """.format(package_extra_state_filter=package_extra_state_filter)
+
+
+def _hit_inchi_sql(mapping):
+    if mapping == "inchi_key":
+        return "m.inchi_key"
+
+    return "NULL::text AS inchi_key"
+
+
+def _limit_sql(rows):
+    if rows is None:
+        return ""
+
+    return "LIMIT :rows"
+
+
+def _result_order_sql(mode):
+    if mode == "similarity":
+        return "ORDER BY similarity DESC NULLS LAST, name"
+
+    return "ORDER BY name"
+
+
+def _build_exact_sql(metadata, rows):
+    functions = metadata["functions"]
+    package_join = _package_join_sql(
+        metadata["mapping"],
+        metadata["package_extra_has_state"],
+    )
+
+    return text("""
+        WITH query_molecule AS (
+            SELECT {mol_from_smiles}(:query) AS molecule
+        ),
+        hits AS (
+            SELECT
+                m.molecule_id,
+                {inchi_sql},
+                m.canonical_smiles,
+                NULL::double precision AS similarity
+            FROM rdk.molecules m
+            CROSS JOIN query_molecule q
+            WHERE m.molecule @= q.molecule
+        ),
+        joined AS (
+            SELECT DISTINCT ON (p.id)
+                p.id,
+                p.name,
+                p.title,
+                h.canonical_smiles,
+                h.similarity
+            FROM hits h
+            {package_join}
+            WHERE p.type = 'molecule'
+              AND p.state = 'active'
+            ORDER BY p.id, p.name
+        )
+        SELECT
+            id,
+            name,
+            title,
+            canonical_smiles,
+            similarity
+        FROM joined
+        {order_sql}
+        {limit_sql}
+    """.format(
+        mol_from_smiles=functions["mol_from_smiles"],
+        inchi_sql=_hit_inchi_sql(metadata["mapping"]),
+        package_join=package_join,
+        order_sql=_result_order_sql("exact"),
+        limit_sql=_limit_sql(rows),
+    ))
+
+
+def _build_substructure_sql(metadata, rows):
+    functions = metadata["functions"]
+    package_join = _package_join_sql(
+        metadata["mapping"],
+        metadata["package_extra_has_state"],
+    )
+
+    return text("""
+        WITH query_molecule AS (
+            SELECT {mol_from_smiles}(:query) AS molecule
+        ),
+        hits AS (
+            SELECT
+                m.molecule_id,
+                {inchi_sql},
+                m.canonical_smiles,
+                NULL::double precision AS similarity
+            FROM rdk.molecules m
+            CROSS JOIN query_molecule q
+            WHERE m.molecule @> q.molecule
+        ),
+        joined AS (
+            SELECT DISTINCT ON (p.id)
+                p.id,
+                p.name,
+                p.title,
+                h.canonical_smiles,
+                h.similarity
+            FROM hits h
+            {package_join}
+            WHERE p.type = 'molecule'
+              AND p.state = 'active'
+            ORDER BY p.id, p.name
+        )
+        SELECT
+            id,
+            name,
+            title,
+            canonical_smiles,
+            similarity
+        FROM joined
+        {order_sql}
+        {limit_sql}
+    """.format(
+        mol_from_smiles=functions["mol_from_smiles"],
+        inchi_sql=_hit_inchi_sql(metadata["mapping"]),
+        package_join=package_join,
+        order_sql=_result_order_sql("substructure"),
+        limit_sql=_limit_sql(rows),
+    ))
+
+
+def _build_smarts_sql(metadata, rows):
+    package_join = _package_join_sql(
+        metadata["mapping"],
+        metadata["package_extra_has_state"],
+    )
+
+    return text("""
+        WITH query_pattern AS (
+            SELECT {smarts_function}(:query) AS pattern
+        ),
+        hits AS (
+            SELECT
+                m.molecule_id,
+                {inchi_sql},
+                m.canonical_smiles,
+                NULL::double precision AS similarity
+            FROM rdk.molecules m
+            CROSS JOIN query_pattern q
+            WHERE m.molecule @> q.pattern
+        ),
+        joined AS (
+            SELECT DISTINCT ON (p.id)
+                p.id,
+                p.name,
+                p.title,
+                h.canonical_smiles,
+                h.similarity
+            FROM hits h
+            {package_join}
+            WHERE p.type = 'molecule'
+              AND p.state = 'active'
+            ORDER BY p.id, p.name
+        )
+        SELECT
+            id,
+            name,
+            title,
+            canonical_smiles,
+            similarity
+        FROM joined
+        {order_sql}
+        {limit_sql}
+    """.format(
+        smarts_function=metadata["smarts_function"],
+        inchi_sql=_hit_inchi_sql(metadata["mapping"]),
+        package_join=package_join,
+        order_sql=_result_order_sql("smarts"),
+        limit_sql=_limit_sql(rows),
+    ))
+
+
+def _build_similarity_sql(metadata, rows):
+    functions = metadata["functions"]
+    operators = metadata["similarity_operators"]
+    package_join = _package_join_sql(
+        metadata["mapping"],
+        metadata["package_extra_has_state"],
+    )
+
+    threshold_filter = ""
+    knn_order = ""
+
+    if operators.get("threshold"):
+        threshold_filter = "AND f.mfp2 % q.query_fingerprint"
+
+    if operators.get("knn"):
+        knn_order = "ORDER BY f.mfp2 <%> q.query_fingerprint"
+
+    return text("""
+        WITH query_molecule AS (
+            SELECT {mol_from_smiles}(:query) AS molecule
+        ),
+        query_fingerprint AS (
+            SELECT
+                {morganbv_fp}(molecule) AS query_fingerprint
+            FROM query_molecule
+            WHERE molecule IS NOT NULL
+        ),
+        hits AS (
+            SELECT
+                m.molecule_id,
+                {inchi_sql},
+                m.canonical_smiles,
+                {tanimoto_sml}(q.query_fingerprint, f.mfp2) AS similarity
+            FROM rdk.molecules m
+            JOIN rdk.fingerprints f
+              ON f.molecule_id = m.molecule_id
+            CROSS JOIN query_fingerprint q
+            WHERE {tanimoto_sml}(q.query_fingerprint, f.mfp2) >= :threshold
+              {threshold_filter}
+            {knn_order}
+        ),
+        joined AS (
+            SELECT DISTINCT ON (p.id)
+                p.id,
+                p.name,
+                p.title,
+                h.canonical_smiles,
+                h.similarity
+            FROM hits h
+            {package_join}
+            WHERE p.type = 'molecule'
+              AND p.state = 'active'
+            ORDER BY p.id, h.similarity DESC NULLS LAST, p.name
+        )
+        SELECT
+            id,
+            name,
+            title,
+            canonical_smiles,
+            similarity
+        FROM joined
+        {order_sql}
+        {limit_sql}
+    """.format(
+        mol_from_smiles=functions["mol_from_smiles"],
+        morganbv_fp=functions["morganbv_fp"],
+        tanimoto_sml=functions["tanimoto_sml"],
+        inchi_sql=_hit_inchi_sql(metadata["mapping"]),
+        threshold_filter=threshold_filter,
+        knn_order=knn_order,
+        package_join=package_join,
+        order_sql=_result_order_sql("similarity"),
+        limit_sql=_limit_sql(rows),
+    ))
+
+
+def _build_search_sql(mode, metadata, rows):
     if mode == "exact":
-        query_canon, query_mol = _canonical_smiles_from_query(query)
+        return _build_exact_sql(metadata, rows)
+
+    if mode == "substructure":
+        return _build_substructure_sql(metadata, rows)
 
     if mode == "smarts":
-        query_pattern = Chem.MolFromSmarts(query)
-        if query_pattern is None:
-            raise toolkit.ValidationError({
-                "smarts": ["Invalid SMARTS. RDKit could not parse the query pattern."]
-            })
+        return _build_smarts_sql(metadata, rows)
 
-    log.debug(query_pattern)
+    if mode == "similarity":
+        return _build_similarity_sql(metadata, rows)
 
-    search_data = {
-        "q": "*:*",
-        "fq": "+dataset_type:molecule",
-        "fl": "id,name,title,smiles,extras_smiles,inchi,extras_inchi",
-        "rows": 1000,
-    }
+    _validation_error("mode", "Unsupported search mode.")
 
-    solr_result = toolkit.get_action("package_search")(context, search_data)
-    candidates = solr_result.get("results", [])
 
-    log.warning(
-        "CHEMSTRUCTURE EXACT SEARCH mode=%s query=%s candidates=%s",
-        mode,
-        query,
-        len(candidates),
-    )
+def _set_transaction_local_tanimoto_threshold(threshold):
+    model.Session.execute(text("""
+        SELECT set_config('rdkit.tanimoto_threshold', :threshold, true)
+    """), {
+        "threshold": str(threshold),
+    })
 
-    hits = []
 
-    for doc in candidates:
-        mol, source_value, source_type = _mol_from_candidate(doc)
+def _execute_structure_sql(sql, params):
+    try:
+        return model.Session.execute(sql, params).fetchall()
+    except Exception as error:
+        log.exception("CHEMSTRUCTURE PostgreSQL RDKit search failed")
+        _validation_error(
+            "database",
+            "PostgreSQL RDKit structure search failed: {}.".format(error),
+        )
 
-        if mol is None:
-            continue
 
-        matched = False
-        candidate_canon = None
-
-        if mode == "exact":
-            candidate_canon = Chem.MolToSmiles(mol, canonical=True)
-            matched = candidate_canon == query_canon
-
-        elif mode == "smarts":
-            matched = mol.HasSubstructMatch(query_pattern)
-            candidate_canon = Chem.MolToSmiles(mol, canonical=True)
-
-        if matched:
-            hits.append({
-                "id": doc.get("id"),
-                "name": doc.get("name"),
-                "title": doc.get("title"),
-                "match_mode": mode,
-                "structure_source": source_type,
-                "structure_value": source_value,
-                "canonical_smiles": candidate_canon,
-            })
-
-        if len(hits) >= rows:
-            break
-
-    return {
-        "count": len(hits),
+def _format_result(row, mode):
+    item = _row_mapping(row)
+    result = {
+        "id": item.get("id"),
+        "name": item.get("name"),
+        "title": item.get("title"),
+        "canonical_smiles": item.get("canonical_smiles"),
         "mode": mode,
-        "query": query,
-        "query_canonical_smiles": query_canon,
-        "results": hits,
     }
 
-
-def _make_morgan_fp(mol, radius=2, fp_size=2048):
-    generator = rdFingerprintGenerator.GetMorganGenerator(
-        radius=radius,
-        fpSize=fp_size,
-    )
-    return generator.GetFingerprint(mol)
-
-
-def _mol_from_smiles_or_inchi(smiles=None, inchi=None, package_name=None):
-    if smiles:
-        mol = Chem.MolFromSmiles(smiles)
-        if mol is not None:
-            return mol, smiles, "smiles"
-
-        log.warning(
-            "CHEMSTRUCTURE invalid SMILES package=%s smiles=%s",
-            package_name,
-            smiles,
-        )
-
-    if inchi:
-        mol = Chem.MolFromInchi(inchi)
-        if mol is not None:
-            return mol, inchi, "inchi"
-
-        log.warning(
-            "CHEMSTRUCTURE invalid InChI package=%s inchi=%s",
-            package_name,
-            inchi,
-        )
-
-    return None, None, None
-
-
-def _query_mol_from_input(query, mode):
-    """
-    Parse the user query according to search mode.
-
-    exact/similarity/substructure:
-        query is expected to be SMILES, normally exported from Ketcher.
-
-    smarts:
-        query is expected to be a SMARTS pattern.
-        This can be kept for advanced/manual usage.
-    """
-
-    if mode == "smarts":
-        pattern = Chem.MolFromSmarts(query)
-        if pattern is None:
-            raise toolkit.ValidationError({
-                "smarts": ["Invalid SMARTS. RDKit could not parse the query."]
-            })
-        return pattern
-
-    mol = Chem.MolFromSmiles(query)
-    if mol is None:
-        raise toolkit.ValidationError({
-            "smiles": ["Invalid SMILES. RDKit could not parse the query."]
-        })
-
-    return mol
-
-
-def _load_molecule_packages_from_db():
-    """
-    Load active CKAN molecule packages and their SMILES/InChI extras directly
-    from PostgreSQL.
-    """
-
-    rows = (
-        model.Session.query(
-            Package.id,
-            Package.name,
-            Package.title,
-            PackageExtra.key,
-            PackageExtra.value,
-        )
-        .join(PackageExtra, Package.id == PackageExtra.package_id)
-        .filter(Package.type == "molecule")
-        .filter(Package.state == "active")
-        .filter(PackageExtra.state == "active")
-        .filter(PackageExtra.key.in_(["smiles", "inchi"]))
-        .all()
-    )
-
-    molecules = {}
-
-    for package_id, name, title, key, value in rows:
-        item = molecules.setdefault(package_id, {
-            "id": package_id,
-            "name": name,
-            "title": title,
-            "smiles": None,
-            "inchi": None,
-        })
-
-        if key == "smiles":
-            item["smiles"] = value
-        elif key == "inchi":
-            item["inchi"] = value
-
-    return list(molecules.values())
-
-def _load_cached_structure_candidates(force_refresh=False):
-    """
-    Load and cache RDKit-ready molecule candidates.
-
-    This avoids reparsing every molecule and regenerating fingerprints on every
-    structure-search request.
-    """
-
-    global _CANDIDATE_CACHE
-
-    if _CANDIDATE_CACHE is not None and not force_refresh:
-        return _CANDIDATE_CACHE
-
-    raw_candidates = _load_molecule_packages_from_db()
-    cached_candidates = []
-
-    for item in raw_candidates:
-        mol, source_value, source_type = _mol_from_smiles_or_inchi(
-            smiles=item.get("smiles"),
-            inchi=item.get("inchi"),
-            package_name=item.get("name"),
-        )
-
-        if mol is None:
-            continue
-
-        canonical_smiles = Chem.MolToSmiles(mol, canonical=True)
-        fingerprint = _make_morgan_fp(mol)
-
-        cached_candidates.append({
-            "id": item.get("id"),
-            "name": item.get("name"),
-            "title": item.get("title"),
-            "mol": mol,
-            "fingerprint": fingerprint,
-            "canonical_smiles": canonical_smiles,
-            "structure_source": source_type,
-            "structure_value": source_value,
-        })
-
-    _CANDIDATE_CACHE = cached_candidates
-
-    log.warning(
-        "CHEMSTRUCTURE candidate cache built raw=%s cached=%s",
-        len(raw_candidates),
-        len(cached_candidates),
-    )
-
-    return _CANDIDATE_CACHE
-
-def _run_structure_search_python(query, mode="similarity", threshold=0.25, rows=None):
-    """
-    Reusable RDKit structure search.
-
-    This is used by:
-    - chemstructure_rdkit_search API action
-    - /molecule page filtering via IPackageController.before_search
-
-    """
-
-    threshold = float(threshold)
-    threshold = max(0.0, min(threshold, 1.0))
-
-    if not query:
-        raise toolkit.ValidationError({
-            "query": ["SMILES or SMARTS query is required."]
-        })
-
-    if mode not in ("exact", "similarity","substructure" ,"smarts", ):
-        raise toolkit.ValidationError({
-            "mode": ["Mode must be one of: exact, smarts, similarity, substructure"]
-        })
-
-    query_obj = _query_mol_from_input(query, mode)
-
-    query_canon = None
-    query_fp = None
-
-    if mode in ("exact", "similarity", "substructure"):
-        query_canon = Chem.MolToSmiles(query_obj, canonical=True)
-
     if mode == "similarity":
-        query_fp = _make_morgan_fp(query_obj)
+        similarity = item.get("similarity")
+        result["similarity"] = (
+            None if similarity is None else round(float(similarity), 4)
+        )
 
-    candidates = _load_cached_structure_candidates()
+    return result
 
-    log.warning(
-        "CHEMSTRUCTURE STRUCTURE SEARCH mode=%s query=%s candidates=%s threshold=%s",
-        mode,
+
+def _run_structure_search_cartridge(query, mode, threshold, rows):
+    query = _validate_query(query)
+    mode = _validate_mode(mode)
+    threshold = _validate_threshold(threshold)
+    rows = _validate_rows(rows)
+
+    metadata = _inspect_rdkit_schema(mode)
+    query_canonical_smiles = _validate_structure_query_in_database(
         query,
-        len(candidates),
-        threshold,
+        mode,
+        metadata,
     )
 
-    hits = []
+    if mode == "similarity" and (
+        metadata["similarity_operators"].get("threshold")
+    ):
+        _set_transaction_local_tanimoto_threshold(threshold)
 
-    for item in candidates:
-        mol = item.get("mol")
-        candidate_canon = item.get("canonical_smiles")
+    sql = _build_search_sql(mode, metadata, rows)
+    params = {
+        "query": query,
+        "threshold": threshold,
+    }
 
-        matched = False
-        similarity = None
+    if rows is not None:
+        params["rows"] = rows
 
-        if mode == "exact":
-            matched = candidate_canon == query_canon
-
-        elif mode in ("substructure", "smarts"):
-            matched = mol.HasSubstructMatch(query_obj)
-
-        elif mode == "similarity":
-            candidate_fp = item.get("fingerprint")
-            similarity = DataStructs.TanimotoSimilarity(query_fp, candidate_fp)
-            matched = similarity >= threshold
-
-        if matched:
-            result = {
-                "id": item.get("id"),
-                "name": item.get("name"),
-                "title": item.get("title"),
-                "mode": mode,
-                "structure_source": item.get("structure_source"),
-                "canonical_smiles": candidate_canon,
-            }
-
-            if similarity is not None:
-                result["similarity"] = round(float(similarity), 4)
-
-            hits.append(result)
-
-            if rows is not None and len(hits) >= rows:
-                break
-
-    if mode == "similarity":
-        hits.sort(key=lambda x: x.get("similarity", 0), reverse=True)
-    else:
-        hits.sort(key=lambda x: x.get("name") or "")
+    result_rows = _execute_structure_sql(sql, params)
+    results = [_format_result(row, mode) for row in result_rows]
 
     return {
-        "count": len(hits),
+        "count": len(results),
         "query": query,
-        "query_canonical_smiles": query_canon,
+        "query_canonical_smiles": query_canonical_smiles,
         "threshold": threshold if mode == "similarity" else None,
-        "source": "postgresql_rdkit",
+        "source": "postgresql_cartridge",
         "solr_used": False,
-        "results": hits,
+        "results": results,
     }
+
+
+def run_structure_search(
+    query,
+    mode="similarity",
+    threshold=DEFAULT_THRESHOLD,
+    rows=None,
+):
+    """
+    Run a PostgreSQL RDKit cartridge search.
+
+    Stored molecule matching is intentionally performed only in PostgreSQL.
+    There is no Python RDKit candidate scan or fallback path here.
+    """
+
+    return _run_structure_search_cartridge(
+        query=query,
+        mode=mode,
+        threshold=threshold,
+        rows=rows,
+    )
+
 
 def chemstructure_rdkit_search(context, data_dict):
     """
@@ -449,17 +891,39 @@ def chemstructure_rdkit_search(context, data_dict):
 
     query = data_dict.get("query") or data_dict.get("smiles")
     mode = data_dict.get("mode", "similarity")
-    threshold = float(data_dict.get("threshold", 0.25))
-    rows_limit = int(data_dict.get("rows", 50))
+    threshold = data_dict.get("threshold", DEFAULT_THRESHOLD)
+    rows = data_dict.get("rows", DEFAULT_ROWS)
 
-    result = run_structure_search(
+    return run_structure_search(
         query=query,
         mode=mode,
         threshold=threshold,
-        rows=rows_limit,
+        rows=rows,
     )
 
-    return result
+
+def chemstructure_exact_search(context, data_dict):
+    """
+    Compatibility action for exact and SMARTS searches.
+
+    Endpoint:
+        /api/3/action/chemstructure_exact_search
+    """
+
+    toolkit.check_access("package_search", context, data_dict)
+
+    query = data_dict.get("smiles") or data_dict.get("query")
+    mode = data_dict.get("mode", "exact")
+    threshold = data_dict.get("threshold", DEFAULT_THRESHOLD)
+    rows = data_dict.get("rows", DEFAULT_ROWS)
+
+    return run_structure_search(
+        query=query,
+        mode=mode,
+        threshold=threshold,
+        rows=rows,
+    )
+
 
 def chemstructure_render_query_image(context, data_dict):
     """
@@ -467,25 +931,13 @@ def chemstructure_render_query_image(context, data_dict):
 
     Endpoint:
         /api/3/action/chemstructure_render_query_image
-
-    Input:
-        {
-          "smiles": "C1=CC=CC=C1"
-        }
-
-    Output:
-        {
-          "image_base64": "<base64 PNG>"
-        }
     """
 
     toolkit.check_access("package_search", context, data_dict)
 
-    query = (
-        data_dict.get("smiles")
-        or data_dict.get("structure_query")
-        or data_dict.get("query")
-    )
+    query = data_dict.get("smiles")
+    query = query or data_dict.get("structure_query")
+    query = query or data_dict.get("query")
 
     if not query:
         raise toolkit.ValidationError({
@@ -496,7 +948,9 @@ def chemstructure_render_query_image(context, data_dict):
 
     if mol is None:
         raise toolkit.ValidationError({
-            "smiles": ["Invalid SMILES. RDKit could not parse the query molecule."]
+            "smiles": [
+                "Invalid SMILES. RDKit could not parse the query molecule."
+            ]
         })
 
     try:
@@ -517,131 +971,3 @@ def chemstructure_render_query_image(context, data_dict):
         raise toolkit.ValidationError({
             "image": ["Could not render query molecule image."]
         })
-
-
-def _run_structure_search_cartridge(
-    query,
-    mode,
-    threshold,
-    rows,
-):
-    """
-    PostgreSQL RDKit cartridge backend.
-    """
-
-    if mode == "exact":
-
-        sql = text("""
-            SELECT
-                id,
-                name,
-                title
-            FROM rdkit
-            WHERE
-                mol = mol_from_smiles(:query)
-            LIMIT :rows
-        """)
-
-        params = {
-            "query": query,
-            "rows": rows,
-        }
-
-    elif mode == "substructure":
-
-        sql = text("""
-            SELECT
-                id,
-                name,
-                title
-            FROM rdkit
-            WHERE
-                mol @> mol_from_smiles(:query)
-            LIMIT :rows
-        """)
-
-        params = {
-            "query": query,
-            "rows": rows,
-        }
-
-    elif mode == "similarity":
-
-        sql = text("""
-            SELECT
-                id,
-                name,
-                title,
-                tanimoto_sml(
-                    mfp2,
-                    morganbv_fp(mol_from_smiles(:query))
-                ) AS similarity
-            FROM rdkit
-            WHERE
-                tanimoto_sml(
-                    mfp2,
-                    morganbv_fp(mol_from_smiles(:query))
-                ) >= :threshold
-            ORDER BY similarity DESC
-            LIMIT :rows
-        """)
-
-        params = {
-            "query": query,
-            "threshold": threshold,
-            "rows": rows,
-        }
-
-    else:
-        raise toolkit.ValidationError({
-            "mode": ["Unsupported search mode."]
-        })
-
-    rows = model.Session.execute(sql, params).fetchall()
-
-    return {
-        "count": len(rows),
-        "results": [dict(r) for r in rows],
-        "source": "postgresql_cartridge",
-        "solr_used": False,
-    }
-
-
-def run_structure_search(
-    query,
-    mode="similarity",
-    threshold=0.25,
-    rows=None,
-):
-    """
-    Automatically use PostgreSQL RDKit cartridge if available,
-    otherwise fall back to Python RDKit.
-    """
-
-    if _rdkit_cartridge_available():
-
-        try:
-
-            log.info(
-                "Using PostgreSQL RDKit cartridge."
-            )
-
-            return _run_structure_search_cartridge(
-                query=query,
-                mode=mode,
-                threshold=threshold,
-                rows=rows,
-            )
-
-        except Exception:
-
-            log.exception(
-                "RDKit cartridge failed. Falling back to Python."
-            )
-
-    return _run_structure_search_python(
-        query=query,
-        mode=mode,
-        threshold=threshold,
-        rows=rows,
-    )
