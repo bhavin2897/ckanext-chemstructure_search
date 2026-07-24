@@ -1,6 +1,7 @@
 (function () {
   var chemstructureAutoSyncTimer = null;
   var chemstructureLastSmiles = "";
+  var chemstructureSearchInProgress = false;
 
   var CHEMSTRUCTURE_LAST_QUERY_KEY = "chemstructure_last_query";
   var CHEMSTRUCTURE_LAST_MODE_KEY = "chemstructure_last_mode";
@@ -37,6 +38,40 @@
       '<div class="alert alert-' + (type || "info") + '">' +
       escapeHtml(message) +
       "</div>";
+  }
+
+  function setSearchLoading(isLoading) {
+    var searchBtn = document.getElementById("chemstructure-search");
+    var loadingOverlay = document.getElementById(
+      "chemstructure-search-loading"
+    );
+
+    chemstructureSearchInProgress = isLoading;
+
+    if (searchBtn) {
+      var originalLabel = searchBtn.getAttribute(
+        "data-chemstructure-original-label"
+      );
+
+      if (!originalLabel) {
+        originalLabel = searchBtn.innerHTML;
+        searchBtn.setAttribute(
+          "data-chemstructure-original-label",
+          originalLabel
+        );
+      }
+
+      searchBtn.disabled = isLoading;
+      searchBtn.setAttribute("aria-busy", isLoading ? "true" : "false");
+      searchBtn.innerHTML = isLoading
+        ? '<i class="fa fa-spinner fa-spin" aria-hidden="true"></i> Searching&hellip;'
+        : originalLabel;
+    }
+
+    if (loadingOverlay) {
+      loadingOverlay.hidden = !isLoading;
+      loadingOverlay.setAttribute("aria-hidden", isLoading ? "false" : "true");
+    }
   }
 
   function escapeHtml(value) {
@@ -318,7 +353,17 @@
       threshold
     );
 
-    window.location.href = "/molecule?" + params.toString();
+    var destination = "/molecule?" + params.toString();
+
+    /*
+     * Give the browser a chance to paint the loading UI before starting the
+     * potentially slow, server-rendered molecule search.
+     */
+    window.requestAnimationFrame(function () {
+      window.requestAnimationFrame(function () {
+        window.location.href = destination;
+      });
+    });
   }
 
   async function restoreMoleculeInKetcher(smiles) {
@@ -417,6 +462,10 @@
   }
 
   async function runSearch(modeOverride) {
+    if (chemstructureSearchInProgress) {
+      return;
+    }
+
     var input = document.getElementById("chemstructure-smiles");
 
     if (!input) {
@@ -442,6 +491,7 @@
       return;
     }
 
+    setSearchLoading(true);
     redirectToMoleculeStructureSearch(query, mode);
   }
 
@@ -733,5 +783,13 @@
         restoreLastStructureSearch();
       });
     }
+  });
+
+  /*
+   * A page restored from the back-forward cache retains its DOM state.
+   * Make the search controls usable again when the user returns.
+   */
+  window.addEventListener("pageshow", function () {
+    setSearchLoading(false);
   });
 })();
