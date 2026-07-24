@@ -738,6 +738,9 @@
   document.addEventListener("DOMContentLoaded", function () {
     var searchBtn = document.getElementById("chemstructure-search");
     var clearBtn = document.getElementById("chemstructure-clear");
+    var activeClearBtn = document.querySelector(
+      ".chemstructure-active-search__clear"
+    );
     var modal = document.getElementById("chemstructure-home-modal");
 
     if (searchBtn) {
@@ -752,6 +755,12 @@
     if (clearBtn) {
       clearBtn.addEventListener("click", function (event) {
         event.preventDefault();
+        clearSearchUi();
+      });
+    }
+
+    if (activeClearBtn) {
+      activeClearBtn.addEventListener("click", function () {
         clearSearchUi();
       });
     }

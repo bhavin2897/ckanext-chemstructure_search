@@ -32,7 +32,7 @@
       <div class="modal-body">
 
         <p class="text-muted">
-          Draw a molecule or paste a SMILES/SMARTS query.
+          Draw a molecule
         </p>
 
         <iframe
@@ -50,17 +50,13 @@
             placeholder="Draw a structure or paste a SMILES/SMARTS query">
               </div>
 
-        <div class="chemstructure-search-mode">
-        <label class="chemstructure-search-mode-title">
-          Search type
-        </label>
-
+      <div class="chemstructure-search-mode" role="radiogroup" aria-label="Search type">
         <label class="chemstructure-radio-option">
           <input
             type="radio"
             name="chemstructure-search-mode"
             value="exact">
-          <span>Exact match</span>
+          <span>Exact</span>
         </label>
 
         <label class="chemstructure-radio-option">
@@ -69,7 +65,7 @@
             name="chemstructure-search-mode"
             value="similarity"
             checked>
-          <span>Fingerprint similarity</span>
+          <span>Similarity</span>
         </label>
 
         <label class="chemstructure-radio-option">
@@ -112,6 +108,37 @@
 
         <div id="chemstructure-message" class="chemstructure-message"></div>
 
+        <div
+          id="chemstructure-search-loading"
+          class="chemstructure-search-loading"
+          role="status"
+          aria-live="polite"
+          aria-hidden="true"
+          hidden>
+          <div class="chemstructure-loading-panel">
+            <div class="chemstructure-loading-heading">
+              <i class="fa fa-spinner fa-spin" aria-hidden="true"></i>
+              <div>
+                <strong>Searching molecule structures&hellip;</strong>
+                <span>This may take a moment.</span>
+              </div>
+            </div>
+
+            <div class="chemstructure-loading-results" aria-hidden="true">
+              {% for row in range(3) %}
+                <div class="chemstructure-loading-result">
+                  <div class="chemstructure-loading-molecule"></div>
+                  <div class="chemstructure-loading-copy">
+                    <div class="chemstructure-loading-line chemstructure-loading-line-title"></div>
+                    <div class="chemstructure-loading-line"></div>
+                    <div class="chemstructure-loading-line chemstructure-loading-line-short"></div>
+                  </div>
+                </div>
+              {% endfor %}
+            </div>
+          </div>
+        </div>
+
       </div>
 
       <div class="modal-footer">
@@ -120,37 +147,6 @@
         </button>
       </div>
 
-    </div>
-  </div>
-</div>
-
-<div
-  id="chemstructure-search-loading"
-  class="chemstructure-search-loading"
-  role="status"
-  aria-live="polite"
-  aria-hidden="true"
-  hidden>
-  <div class="chemstructure-loading-panel">
-    <div class="chemstructure-loading-heading">
-      <i class="fa fa-spinner fa-spin" aria-hidden="true"></i>
-      <div>
-        <strong>Searching molecule structures&hellip;</strong>
-        <span>This may take a moment.</span>
-      </div>
-    </div>
-
-    <div class="chemstructure-loading-results" aria-hidden="true">
-      {% for row in range(3) %}
-        <div class="chemstructure-loading-result">
-          <div class="chemstructure-loading-molecule"></div>
-          <div class="chemstructure-loading-copy">
-            <div class="chemstructure-loading-line chemstructure-loading-line-title"></div>
-            <div class="chemstructure-loading-line"></div>
-            <div class="chemstructure-loading-line chemstructure-loading-line-short"></div>
-          </div>
-        </div>
-      {% endfor %}
     </div>
   </div>
 </div>
@@ -208,6 +204,12 @@
     max-width: 1200px;
   }
 
+  .chemstructure-modal .modal-body {
+    position: relative;
+    min-height: 590px;
+    overflow: hidden;
+  }
+
   .chemstructure-modal-ketcher-frame {
     width: 100%;
     height: 430px;
@@ -222,17 +224,13 @@
 
   .chemstructure-search-mode {
     display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 14px;
+    align-items: stretch;
+    gap: 0;
+    padding: 4px;
     margin-top: 14px;
-    margin-bottom: 8px;
-  }
-
-  .chemstructure-search-mode-title {
-    margin: 0;
-    font-weight: 700;
-    color: #333;
+    margin-bottom: 12px;
+    background: #f6f7f8;
+    border-radius: 5px;
   }
 
   .chemstructure-search-mode label::after,
@@ -244,16 +242,51 @@
   }
 
   .chemstructure-radio-option {
-    display: inline-flex;
+    position: relative;
+    display: flex;
+    flex: 1 1 0;
     align-items: center;
-    gap: 5px;
+    justify-content: center;
     margin: 0;
     font-weight: 400;
     cursor: pointer;
   }
 
   .chemstructure-radio-option input {
-    margin: 0;
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    opacity: 0;
+    pointer-events: none;
+  }
+
+  .chemstructure-radio-option span {
+    width: 100%;
+    padding: 7px 12px;
+    border: 1px solid transparent;
+    border-radius: 4px;
+    color: #4f5965;
+    text-align: center;
+    font-size: 13px;
+    line-height: 1.2;
+    transition: background-color 140ms ease, border-color 140ms ease,
+      box-shadow 140ms ease, color 140ms ease;
+  }
+
+  .chemstructure-radio-option input:checked + span {
+    color: #222;
+    background: #fff;
+    border-color: #e3e6e8;
+    box-shadow: 0 1px 3px rgba(25, 40, 45, 0.1);
+  }
+
+  .chemstructure-radio-option input:focus + span {
+    outline: 2px solid #1f9aaa;
+    outline-offset: 1px;
+  }
+
+  .chemstructure-radio-option:hover span {
+    color: #1f7783;
   }
 
   #chemstructure-threshold-wrapper {
@@ -284,17 +317,27 @@
   font-size: 12px;
 }
   .chemstructure-actions {
-      display: grid;
-      grid-gap: 1rem;
-      grid-template-columns: 50% 50%;
-      grid-template-areas: 'item item';
-      align-items: center;
-      width: 100%;
-      margin-top: 12px;
-      margin-bottom: 12px;
-    }
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 8px;
+    width: 100%;
+    margin-top: 12px;
+    margin-bottom: 12px;
+  }
+
   .chemstructure-actions .btn {
-    min-width: 100px;
+    min-width: 76px;
+    padding: 5px 13px;
+    font-size: 13px;
+    line-height: 1.4;
+  }
+
+  .chemstructure-modal .modal-footer .btn {
+    min-width: 70px;
+    padding: 5px 13px;
+    font-size: 13px;
+    line-height: 1.4;
   }
 
   .chemstructure-message {
@@ -306,23 +349,21 @@
   }
 
   .chemstructure-search-loading {
-    position: fixed;
-    z-index: 2000;
+    position: absolute;
+    z-index: 10;
     inset: 0;
     display: flex;
-    align-items: center;
+    align-items: flex-start;
     justify-content: center;
-    padding: 24px;
-    background: rgba(245, 248, 249, 0.94);
+    padding: 28px 32px;
+    background: #fff;
+    animation: chemstructure-loading-enter 180ms ease-out both;
   }
 
   .chemstructure-loading-panel {
-    width: min(720px, 100%);
-    padding: 28px;
-    background: #fff;
-    border: 1px solid #d9e2e5;
-    border-radius: 8px;
-    box-shadow: 0 12px 36px rgba(25, 50, 56, 0.18);
+    width: 100%;
+    max-width: 900px;
+    padding-top: 12px;
   }
 
   .chemstructure-loading-heading {
@@ -397,7 +438,19 @@
     to { background-position: -200% 0; }
   }
 
+  @keyframes chemstructure-loading-enter {
+    from {
+      opacity: 0;
+      transform: translateY(6px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
   @media (prefers-reduced-motion: reduce) {
+    .chemstructure-search-loading,
     .chemstructure-loading-molecule,
     .chemstructure-loading-line {
       animation: none;
@@ -415,7 +468,7 @@
     }
 
     .chemstructure-search-mode {
-      align-items: flex-start;
+      width: 100%;
     }
 
     .chemstructure-threshold-wrapper {
@@ -429,6 +482,14 @@
     .chemstructure-search-right {
       margin-left: auto;
       margin-right: auto;
+    }
+
+    .chemstructure-modal .modal-body {
+      min-height: 560px;
+    }
+
+    .chemstructure-search-loading {
+      padding: 22px 18px;
     }
   }
 </style>

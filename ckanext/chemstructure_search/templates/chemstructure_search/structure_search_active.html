@@ -9,12 +9,6 @@
           Structure Search Active
         </div>
 
-        <a
-          class="chemstructure-active-search__clear"
-          href="{{ structure.clear_url }}">
-          Clear
-        </a>
-
         <div class="chemstructure-active-search__row">
           <strong>Mode:</strong>
           <span>{{ structure.mode_label }}</span>
@@ -41,6 +35,14 @@
         </div>
       </div>
 
+    </div>
+
+    <div class="chemstructure-active-search__footer">
+      <a
+        class="chemstructure-active-search__clear"
+        href="{{ structure.clear_url }}">
+        Clear
+      </a>
     </div>
   </div>
 {% endif %}
@@ -75,9 +77,17 @@
 
 .chemstructure-active-search__clear {
   display: inline-block;
-  margin-bottom: 8px;
+  padding: 4px 10px;
   font-size: 13px;
   font-weight: 600;
+}
+
+.chemstructure-active-search__footer {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid #d7eef1;
 }
 
 .chemstructure-active-search__row {
