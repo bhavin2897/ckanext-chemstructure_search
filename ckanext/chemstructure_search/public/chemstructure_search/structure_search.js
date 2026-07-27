@@ -340,7 +340,11 @@
 
     params.set("structure_query", query);
     params.set("structure_mode", mode);
-    params.set("sort", "title_string asc");
+    /*
+     * A structure query is an active search, so do not inherit the
+     * name-ascending default used by the empty molecule listing.
+     */
+    params.set("sort", "score desc, metadata_modified desc");
 
     if (mode === "similarity") {
       params.set("threshold", threshold);
