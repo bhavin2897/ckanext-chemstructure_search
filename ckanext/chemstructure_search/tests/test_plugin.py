@@ -414,9 +414,143 @@ def test_before_search_generates_existing_solr_package_name_filter(
     ):
         params = search_plugin.before_search({
             "fq": 'owner_org:"org-1" structure_query:CCO threshold:0.7',
+            "start": 0,
+            "rows": 20,
+            "sort": "title_string asc",
+            "extras": {},
         })
 
     assert "{!terms f=name}ethanol,benzene" in params["fq"]
     assert "owner_org" in params["fq"]
     assert "structure_query:" not in params["fq"]
     assert "threshold:" not in params["fq"]
+    assert params["sort"] == plugin.CHEMICAL_RELEVANCE_SORT
+    assert params["start"] == 0
+    assert params["rows"] == 2
+
+
+def test_after_search_restores_similarity_order_and_values(monkeypatch):
+    app = Flask(__name__)
+    search_plugin = plugin.ChemstructureSearchPlugin()
+
+    monkeypatch.setattr(plugin, "run_structure_search", lambda **kwargs: {
+        "results": [
+            {"name": "ethylbenzene", "similarity": 1.0},
+            {"name": "propylbenzene", "similarity": 0.61},
+            {"name": "butylbenzene", "similarity": 0.52},
+        ],
+    })
+
+    with app.test_request_context(
+        "/molecule?structure_query=CCc1ccccc1"
+        "&structure_mode=similarity&threshold=0.05"
+        "&sort=score+desc%2C+metadata_modified+desc"
+    ):
+        params = search_plugin.before_search({
+            "fq": "",
+            "start": 0,
+            "rows": 20,
+            "sort": plugin.CHEMICAL_RELEVANCE_SORT,
+            "extras": {},
+        })
+        search_results = search_plugin.after_search({
+            "count": 3,
+            "results": [
+                {"name": "butylbenzene"},
+                {"name": "propylbenzene"},
+                {"name": "ethylbenzene"},
+            ],
+        }, params)
+
+    assert [
+        item["name"]
+        for item in search_results["results"]
+    ] == [
+        "ethylbenzene",
+        "propylbenzene",
+        "butylbenzene",
+    ]
+    assert search_results["results"][0]["structure_similarity"] == 1.0
+    assert search_results["results"][0]["structure_rank"] == 1
+
+
+def test_chemical_ranking_is_applied_before_pagination(monkeypatch):
+    app = Flask(__name__)
+    search_plugin = plugin.ChemstructureSearchPlugin()
+
+    monkeypatch.setattr(plugin, "run_structure_search", lambda **kwargs: {
+        "results": [
+            {"name": "first", "similarity": 1.0},
+            {"name": "second", "similarity": 0.9},
+            {"name": "third", "similarity": 0.8},
+            {"name": "fourth", "similarity": 0.7},
+        ],
+    })
+
+    with app.test_request_context(
+        "/molecule?structure_query=CCO&structure_mode=similarity"
+    ):
+        params = search_plugin.before_search({
+            "fq": "",
+            "start": 2,
+            "rows": 2,
+            "extras": {},
+        })
+
+        assert params["start"] == 0
+        assert params["rows"] == 4
+
+        search_results = search_plugin.after_search({
+            "count": 4,
+            "results": [
+                {"name": "fourth"},
+                {"name": "second"},
+                {"name": "first"},
+                {"name": "third"},
+            ],
+        }, params)
+
+    assert search_results["count"] == 4
+    assert [
+        item["name"]
+        for item in search_results["results"]
+    ] == ["third", "fourth"]
+
+
+def test_explicit_name_sort_keeps_solr_order_and_pagination(monkeypatch):
+    app = Flask(__name__)
+    search_plugin = plugin.ChemstructureSearchPlugin()
+
+    monkeypatch.setattr(plugin, "run_structure_search", lambda **kwargs: {
+        "results": [
+            {"name": "ethylbenzene", "similarity": 1.0},
+            {"name": "butylbenzene", "similarity": 0.52},
+        ],
+    })
+
+    with app.test_request_context(
+        "/molecule?structure_query=CCc1ccccc1"
+        "&structure_mode=similarity&sort=title_string+asc"
+    ):
+        params = search_plugin.before_search({
+            "fq": "",
+            "start": 20,
+            "rows": 20,
+            "sort": "title_string asc",
+            "extras": {},
+        })
+        search_results = search_plugin.after_search({
+            "count": 2,
+            "results": [
+                {"name": "butylbenzene"},
+                {"name": "ethylbenzene"},
+            ],
+        }, params)
+
+    assert params["start"] == 20
+    assert params["rows"] == 20
+    assert plugin.STRUCTURE_RANK_EXTRAS_KEY not in params["extras"]
+    assert [
+        item["name"]
+        for item in search_results["results"]
+    ] == ["butylbenzene", "ethylbenzene"]

@@ -5,13 +5,21 @@ from flask import request
 import ckan.plugins as plugins
 import ckan.plugins.toolkit as toolkit
 
-from ckanext.chemstructure_search.action import (chemstructure_exact_search, chemstructure_rdkit_search, run_structure_search, chemstructure_render_query_image)
+from ckanext.chemstructure_search.action import (
+    chemstructure_exact_search,
+    chemstructure_rdkit_search,
+    chemstructure_render_query_image,
+    run_structure_search,
+)
 from ckanext.chemstructure_search.helpers import chemstructure_search_params
 
 from ckanext.chemstructure_search.views import get_blueprints
 
 
 log = logging.getLogger(__name__)
+
+CHEMICAL_RELEVANCE_SORT = "score desc, metadata_modified desc"
+STRUCTURE_RANK_EXTRAS_KEY = "chemstructure_search_rank"
 
 
 class ChemstructureSearchPlugin(plugins.SingletonPlugin):
@@ -117,7 +125,140 @@ class ChemstructureSearchPlugin(plugins.SingletonPlugin):
         fq = self._build_name_filter(names)
         self._append_fq(search_params, fq)
 
+        if self._uses_chemical_relevance_sort(search_params):
+            self._prepare_chemical_ranking(
+                search_params,
+                structure_result.get("results", []),
+            )
+
         return search_params
+
+    def after_search(self, search_results, search_params):
+        """
+        Restore the PostgreSQL RDKit order after Solr has loaded the packages.
+
+        The structure-name filter sent to Solr is deliberately unscored, so
+        Solr cannot preserve the Tanimoto ordering returned by RDKit. For
+        chemical relevance searches, before_search asks Solr for the complete
+        authorized result set and stores the requested page here. This lets us
+        rank first and paginate second, so a top match cannot land on a later
+        Solr page.
+        """
+
+        extras = search_params.get("extras") or {}
+        ranking = extras.get(STRUCTURE_RANK_EXTRAS_KEY)
+
+        if not ranking:
+            return search_results
+
+        rank_by_name = ranking["rank_by_name"]
+        similarity_by_name = ranking["similarity_by_name"]
+        unranked_position = len(rank_by_name)
+        results = list(search_results.get("results") or [])
+
+        results.sort(
+            key=lambda item: rank_by_name.get(
+                item.get("name"),
+                unranked_position,
+            )
+        )
+
+        for item in results:
+            name = item.get("name")
+
+            if name not in similarity_by_name:
+                continue
+
+            similarity = similarity_by_name[name]
+
+            if similarity is not None:
+                item["structure_similarity"] = similarity
+
+            item["structure_rank"] = rank_by_name[name] + 1
+
+        requested_start = ranking["requested_start"]
+        requested_rows = ranking["requested_rows"]
+
+        if requested_rows is None:
+            search_results["results"] = results[requested_start:]
+        else:
+            requested_end = requested_start + requested_rows
+            search_results["results"] = results[
+                requested_start:requested_end
+            ]
+
+        return search_results
+
+    def _uses_chemical_relevance_sort(self, search_params):
+        """
+        Treat a missing sort on an active structure search as relevance.
+
+        request.args is checked directly so this remains correct regardless
+        of whether another plugin has already applied the empty-listing
+        name-ascending default.
+        """
+
+        requested_sort = request.args.get("sort")
+
+        if requested_sort:
+            return requested_sort in (CHEMICAL_RELEVANCE_SORT, "rank")
+
+        search_params["sort"] = CHEMICAL_RELEVANCE_SORT
+        return True
+
+    def _prepare_chemical_ranking(self, search_params, results):
+        ranked_results = [
+            item
+            for item in results
+            if item.get("name")
+        ]
+        rank_by_name = {
+            item["name"]: position
+            for position, item in enumerate(ranked_results)
+        }
+        similarity_by_name = {
+            item["name"]: item.get("similarity")
+            for item in ranked_results
+        }
+
+        requested_start = self._nonnegative_int(
+            search_params.get("start"),
+            default=0,
+        )
+        requested_rows = self._nonnegative_int(
+            search_params.get("rows"),
+            default=None,
+        )
+
+        extras = search_params.get("extras")
+
+        if not isinstance(extras, dict):
+            extras = {}
+            search_params["extras"] = extras
+
+        extras[STRUCTURE_RANK_EXTRAS_KEY] = {
+            "rank_by_name": rank_by_name,
+            "similarity_by_name": similarity_by_name,
+            "requested_start": requested_start,
+            "requested_rows": requested_rows,
+        }
+
+        # Solr must return every authorized structure match before we can
+        # apply the RDKit order and then select the requested page.
+        search_params["start"] = 0
+        search_params["rows"] = len(rank_by_name)
+        search_params["sort"] = CHEMICAL_RELEVANCE_SORT
+
+    def _nonnegative_int(self, value, default):
+        if value is None or value == "":
+            return default
+
+        try:
+            value = int(value)
+        except (TypeError, ValueError):
+            return default
+
+        return value if value >= 0 else default
 
     def _append_fq(self, search_params, fq):
         """
