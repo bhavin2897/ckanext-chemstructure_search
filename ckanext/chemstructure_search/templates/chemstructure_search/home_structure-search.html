@@ -54,7 +54,7 @@
         <label class="chemstructure-radio-option">
           <input
             type="radio"
-            name="chemstructure-search-mode"
+            class="chemstructure-search-mode-input"
             value="exact">
           <span>Exact</span>
         </label>
@@ -62,7 +62,7 @@
         <label class="chemstructure-radio-option">
           <input
             type="radio"
-            name="chemstructure-search-mode"
+            class="chemstructure-search-mode-input"
             value="similarity"
             checked>
           <span>Similarity</span>
@@ -71,7 +71,7 @@
         <label class="chemstructure-radio-option">
           <input
             type="radio"
-            name="chemstructure-search-mode"
+            class="chemstructure-search-mode-input"
             value="substructure">
           <span>Substructure</span>
         </label>
@@ -98,10 +98,16 @@
     </div>
 
       <div class="chemstructure-actions">
-        <button id="chemstructure-clear" class="btn btn-link">
+        <button
+          id="chemstructure-clear"
+          type="button"
+          class="btn btn-link">
           Clear
         </button>
-        <button id="chemstructure-search" class="btn btn-primary chemstructure-search-right">
+        <button
+          id="chemstructure-search"
+          type="button"
+          class="btn btn-primary chemstructure-search-right">
           Search
         </button>
       </div>

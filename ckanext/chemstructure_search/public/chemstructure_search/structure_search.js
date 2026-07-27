@@ -186,7 +186,7 @@
 
   function getSelectedSearchMode() {
     var selected = document.querySelector(
-      'input[name="chemstructure-search-mode"]:checked'
+      ".chemstructure-search-mode-input:checked"
     );
 
     return selected ? selected.value : DEFAULT_MODE;
@@ -196,21 +196,35 @@
     var safeMode = mode || DEFAULT_MODE;
 
     var selected = document.querySelector(
-      'input[name="chemstructure-search-mode"][value="' + safeMode + '"]'
+      '.chemstructure-search-mode-input[value="' + safeMode + '"]'
     );
 
     if (selected) {
+      uncheckOtherSearchModes(selected);
       selected.checked = true;
       return;
     }
 
     var fallback = document.querySelector(
-      'input[name="chemstructure-search-mode"][value="' + DEFAULT_MODE + '"]'
+      '.chemstructure-search-mode-input[value="' + DEFAULT_MODE + '"]'
     );
 
     if (fallback) {
+      uncheckOtherSearchModes(fallback);
       fallback.checked = true;
     }
+  }
+
+  function uncheckOtherSearchModes(selected) {
+    var modeRadios = document.querySelectorAll(
+      ".chemstructure-search-mode-input"
+    );
+
+    Array.prototype.forEach.call(modeRadios, function (radio) {
+      if (radio !== selected) {
+        radio.checked = false;
+      }
+    });
   }
 
   function getSelectedThreshold() {
@@ -542,7 +556,7 @@
   function bindThresholdEvents() {
     var thresholdInput = document.getElementById("chemstructure-threshold");
     var modeRadios = document.querySelectorAll(
-      'input[name="chemstructure-search-mode"]'
+      ".chemstructure-search-mode-input"
     );
 
     if (thresholdInput) {
@@ -557,6 +571,7 @@
 
     Array.prototype.forEach.call(modeRadios, function (radio) {
       radio.addEventListener("change", function () {
+        uncheckOtherSearchModes(radio);
         updateThresholdVisibility();
         updateThresholdValueLabel();
       });
@@ -745,6 +760,9 @@
     var activeClearBtn = document.querySelector(
       ".chemstructure-active-search__clear"
     );
+    var activeSearchReopen = document.querySelector(
+      ".chemstructure-active-search__reopen"
+    );
     var modal = document.getElementById("chemstructure-home-modal");
 
     if (searchBtn) {
@@ -766,6 +784,17 @@
     if (activeClearBtn) {
       activeClearBtn.addEventListener("click", function () {
         clearSearchUi();
+      });
+    }
+
+    if (activeSearchReopen) {
+      activeSearchReopen.addEventListener("keydown", function (event) {
+        if (event.key !== "Enter" && event.key !== " ") {
+          return;
+        }
+
+        event.preventDefault();
+        activeSearchReopen.click();
       });
     }
 

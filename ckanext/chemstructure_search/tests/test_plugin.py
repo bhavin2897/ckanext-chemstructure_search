@@ -429,6 +429,45 @@ def test_before_search_generates_existing_solr_package_name_filter(
     assert params["rows"] == 2
 
 
+@pytest.mark.parametrize("path", [
+    (
+        "/dataset/?q=2-Hydroxy-N-phenylpropanamide"
+        "&chemstructure-search-mode=similarity"
+    ),
+    (
+        "/molecule?q=ethylbenzene"
+        "&chemstructure-search-mode=similarity"
+    ),
+])
+def test_before_search_ignores_plain_text_searches(monkeypatch, path):
+    app = Flask(__name__)
+    search_plugin = plugin.ChemstructureSearchPlugin()
+
+    def unexpected_structure_search(**kwargs):
+        raise AssertionError("Structure search must not run for text search")
+
+    monkeypatch.setattr(
+        plugin,
+        "run_structure_search",
+        unexpected_structure_search,
+    )
+    original_params = {
+        "q": "ethylbenzene",
+        "fq": "",
+        "sort": plugin.CHEMICAL_RELEVANCE_SORT,
+    }
+
+    with app.test_request_context(path):
+        params = search_plugin.before_search(original_params)
+
+    assert params is original_params
+    assert params == {
+        "q": "ethylbenzene",
+        "fq": "",
+        "sort": plugin.CHEMICAL_RELEVANCE_SORT,
+    }
+
+
 def test_after_search_restores_similarity_order_and_values(monkeypatch):
     app = Flask(__name__)
     search_plugin = plugin.ChemstructureSearchPlugin()

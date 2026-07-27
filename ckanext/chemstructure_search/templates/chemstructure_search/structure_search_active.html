@@ -2,7 +2,14 @@
 
 {% if structure %}
   <div class="chemstructure-active-search">
-    <div class="chemstructure-active-search__content">
+    <div
+      class="chemstructure-active-search__content chemstructure-active-search__reopen"
+      role="button"
+      tabindex="0"
+      aria-label="Reopen structure search editor"
+      title="Edit this structure search"
+      data-toggle="modal"
+      data-target="#chemstructure-home-modal">
 
       <div class="chemstructure-active-search__details">
         <div class="chemstructure-active-search__title">
@@ -63,6 +70,23 @@
   align-items: flex-start;
   justify-content: space-between;
   gap: 18px;
+}
+
+.chemstructure-active-search__reopen {
+  cursor: pointer;
+}
+
+.chemstructure-active-search__reopen:hover
+  .chemstructure-active-query-image,
+.chemstructure-active-search__reopen:focus
+  .chemstructure-active-query-image {
+  border-color: #1f9aaa;
+  box-shadow: 0 0 0 2px rgba(31, 154, 170, 0.18);
+}
+
+.chemstructure-active-search__reopen:focus {
+  outline: 2px solid #1f9aaa;
+  outline-offset: 3px;
 }
 
 .chemstructure-active-search__details {
