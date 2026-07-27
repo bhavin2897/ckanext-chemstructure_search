@@ -135,12 +135,23 @@ def test_exact_matching_uses_cartridge_operator(monkeypatch):
 
 
 def test_smiles_substructure_matching_uses_contains_operator(monkeypatch):
-    _result, sql, _params, _calls = run_with_captured_sql(
+    result, sql, _params, _calls = run_with_captured_sql(
         monkeypatch,
         "substructure",
     )
 
     assert "m.molecule @> q.molecule" in sql
+    assert "LEFT JOIN rdk.fingerprints f" in sql
+    assert "ON f.molecule_id = m.molecule_id" in sql
+    assert '"public"."morganbv_fp"(molecule)' in sql
+    assert (
+        '"public"."tanimoto_sml"('
+        "\n                    q.query_fingerprint,"
+        "\n                    f.mfp2"
+    ) in sql
+    assert "ORDER BY similarity DESC NULLS LAST, name" in sql
+    assert ">= :threshold" not in sql
+    assert result["results"][0]["similarity"] == 0.91
     assert_common_package_mapping_sql(sql)
 
 
@@ -316,7 +327,11 @@ def test_missing_rdk_molecules_raises_validation_error(monkeypatch):
         action._inspect_rdkit_schema("exact")
 
 
-def test_missing_rdk_fingerprints_raises_for_similarity(monkeypatch):
+@pytest.mark.parametrize("mode", ["similarity", "substructure"])
+def test_missing_rdk_fingerprints_raises_for_ranked_modes(
+    monkeypatch,
+    mode,
+):
     monkeypatch.setattr(action, "_scalar", lambda sql, params=None: True)
     monkeypatch.setattr(action, "_fetch_table_names", lambda: {
         "molecules": "rdk.molecules",
@@ -326,7 +341,7 @@ def test_missing_rdk_fingerprints_raises_for_similarity(monkeypatch):
     })
 
     with pytest.raises(toolkit.ValidationError):
-        action._inspect_rdkit_schema("similarity")
+        action._inspect_rdkit_schema(mode)
 
 
 def test_mapping_falls_back_to_inchi_key_for_non_string_molecule_id():

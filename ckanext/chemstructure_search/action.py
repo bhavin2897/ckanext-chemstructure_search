@@ -18,6 +18,7 @@ RDLogger.DisableLog("rdApp.error")
 log = logging.getLogger(__name__)
 
 VALID_SEARCH_MODES = ("exact", "substructure", "smarts", "similarity")
+FINGERPRINT_RANKED_MODES = ("similarity", "substructure")
 DEFAULT_ROWS = 50
 DEFAULT_THRESHOLD = 0.25
 
@@ -329,11 +330,13 @@ def _inspect_rdkit_schema(mode):
                 "Required CKAN table public.package_extra is unavailable.",
             )
 
-        if mode == "similarity" and not tables.get("fingerprints"):
+        if mode in FINGERPRINT_RANKED_MODES and not tables.get(
+            "fingerprints"
+        ):
             _validation_error(
                 "fingerprints",
                 "Required table rdk.fingerprints is unavailable for "
-                "similarity search.",
+                "{} search.".format(mode),
             )
 
         columns = _fetch_columns()
@@ -351,7 +354,7 @@ def _inspect_rdkit_schema(mode):
             "schema",
         )
 
-        if mode == "similarity":
+        if mode in FINGERPRINT_RANKED_MODES:
             _require_columns(
                 columns,
                 ("rdk", "fingerprints"),
@@ -364,7 +367,7 @@ def _inspect_rdkit_schema(mode):
 
         required_functions = ["mol_from_smiles", "mol_to_smiles"]
 
-        if mode == "similarity":
+        if mode in FINGERPRINT_RANKED_MODES:
             required_functions.extend(["morganbv_fp", "tanimoto_sml"])
 
         missing_functions = [
@@ -526,7 +529,7 @@ def _limit_sql(rows):
 
 
 def _result_order_sql(mode):
-    if mode == "similarity":
+    if mode in FINGERPRINT_RANKED_MODES:
         return "ORDER BY similarity DESC NULLS LAST, name"
 
     return "ORDER BY name"
@@ -595,14 +598,26 @@ def _build_substructure_sql(metadata, rows):
         WITH query_molecule AS (
             SELECT {mol_from_smiles}(:query) AS molecule
         ),
+        query_data AS (
+            SELECT
+                molecule,
+                {morganbv_fp}(molecule) AS query_fingerprint
+            FROM query_molecule
+            WHERE molecule IS NOT NULL
+        ),
         hits AS (
             SELECT
                 m.molecule_id,
                 {inchi_sql},
                 m.canonical_smiles,
-                NULL::double precision AS similarity
+                {tanimoto_sml}(
+                    q.query_fingerprint,
+                    f.mfp2
+                ) AS similarity
             FROM rdk.molecules m
-            CROSS JOIN query_molecule q
+            LEFT JOIN rdk.fingerprints f
+              ON f.molecule_id = m.molecule_id
+            CROSS JOIN query_data q
             WHERE m.molecule @> q.molecule
         ),
         joined AS (
@@ -616,7 +631,7 @@ def _build_substructure_sql(metadata, rows):
             {package_join}
             WHERE p.type = 'molecule'
               AND p.state = 'active'
-            ORDER BY p.id, p.name
+            ORDER BY p.id, h.similarity DESC NULLS LAST, p.name
         )
         SELECT
             id,
@@ -629,6 +644,8 @@ def _build_substructure_sql(metadata, rows):
         {limit_sql}
     """.format(
         mol_from_smiles=functions["mol_from_smiles"],
+        morganbv_fp=functions["morganbv_fp"],
+        tanimoto_sml=functions["tanimoto_sml"],
         inchi_sql=_hit_inchi_sql(metadata["mapping"]),
         package_join=package_join,
         order_sql=_result_order_sql("substructure"),
@@ -808,7 +825,7 @@ def _format_result(row, mode):
         "mode": mode,
     }
 
-    if mode == "similarity":
+    if mode in FINGERPRINT_RANKED_MODES:
         similarity = item.get("similarity")
         result["similarity"] = (
             None if similarity is None else round(float(similarity), 4)
