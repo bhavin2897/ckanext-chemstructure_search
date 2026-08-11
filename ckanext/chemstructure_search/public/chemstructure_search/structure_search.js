@@ -2,6 +2,8 @@
   var chemstructureAutoSyncTimer = null;
   var chemstructureLastSmiles = "";
   var chemstructureSearchInProgress = false;
+  var chemstructureKetcherMutationInProgress = false;
+  var chemstructureClearInProgress = false;
 
   var CHEMSTRUCTURE_LAST_QUERY_KEY = "chemstructure_last_query";
   var CHEMSTRUCTURE_LAST_MODE_KEY = "chemstructure_last_mode";
@@ -124,7 +126,7 @@
       var smiles = await iframe.contentWindow.ketcher.getSmiles();
 
       if (!smiles || !smiles.trim()) {
-        return null;
+        return "";
       }
 
       smiles = smiles.trim();
@@ -146,14 +148,21 @@
   async function syncSmilesFromKetcher() {
     var input = document.getElementById("chemstructure-smiles");
 
-    if (!input) {
+    if (!input || chemstructureKetcherMutationInProgress) {
       return null;
     }
 
     var smiles = await getSmilesFromKetcherSilently();
 
-    if (!smiles) {
+    if (smiles === null) {
       return null;
+    }
+
+    if (!smiles) {
+      if (chemstructureLastSmiles) {
+        resetStructureQueryState();
+      }
+      return "";
     }
 
     if (smiles === chemstructureLastSmiles) {
@@ -407,7 +416,13 @@
         var ketcher = iframe.contentWindow.ketcher;
 
         if (typeof ketcher.setMolecule === "function") {
-          await ketcher.setMolecule(smiles);
+          chemstructureKetcherMutationInProgress = true;
+
+          try {
+            await ketcher.setMolecule(smiles);
+          } finally {
+            chemstructureKetcherMutationInProgress = false;
+          }
 
           window.setTimeout(function () {
             try {
@@ -491,7 +506,11 @@
       return;
     }
 
-    var smilesFromKetcher = await getSmilesFromKetcherSilently();
+    var smilesFromKetcher = null;
+
+    if (!chemstructureClearInProgress) {
+      smilesFromKetcher = await getSmilesFromKetcherSilently();
+    }
 
     if (smilesFromKetcher) {
       input.value = smilesFromKetcher;
@@ -513,26 +532,30 @@
     redirectToMoleculeStructureSearch(query, mode);
   }
 
-  function clearKetcher() {
+  async function clearKetcher() {
     var iframe = document.getElementById("ketcher-frame");
 
     if (
       iframe &&
       iframe.contentWindow &&
-      iframe.contentWindow.ketcher &&
-      typeof iframe.contentWindow.ketcher.setMolecule === "function"
+      iframe.contentWindow.ketcher
     ) {
       try {
-        iframe.contentWindow.ketcher.setMolecule("");
+        var ketcher = iframe.contentWindow.ketcher;
+
+        if (ketcher.editor && typeof ketcher.editor.clear === "function") {
+          await ketcher.editor.clear();
+        } else if (typeof ketcher.setMolecule === "function") {
+          await ketcher.setMolecule("");
+        }
       } catch (err) {
         console.warn("CHEMSTRUCTURE: Could not clear Ketcher:", err);
       }
     }
   }
 
-  function clearSearchUi() {
+  function resetStructureQueryState() {
     var input = document.getElementById("chemstructure-smiles");
-    var message = document.getElementById("chemstructure-message");
 
     if (input) {
       input.value = "";
@@ -541,7 +564,23 @@
     chemstructureLastSmiles = "";
 
     clearLastStructureSearch();
-    clearKetcher();
+  }
+
+  async function clearStructureSearch() {
+    var message = document.getElementById("chemstructure-message");
+
+    chemstructureClearInProgress = true;
+    chemstructureKetcherMutationInProgress = true;
+    resetStructureQueryState();
+
+    try {
+      await clearKetcher();
+    } finally {
+      /* Discard any value observed while Ketcher was completing its clear. */
+      resetStructureQueryState();
+      chemstructureKetcherMutationInProgress = false;
+      chemstructureClearInProgress = false;
+    }
 
     restoreSelectedSearchMode(DEFAULT_MODE);
     setThresholdValue(DEFAULT_THRESHOLD);
@@ -777,13 +816,13 @@
     if (clearBtn) {
       clearBtn.addEventListener("click", function (event) {
         event.preventDefault();
-        clearSearchUi();
+        clearStructureSearch();
       });
     }
 
     if (activeClearBtn) {
       activeClearBtn.addEventListener("click", function () {
-        clearSearchUi();
+        clearStructureSearch();
       });
     }
 
