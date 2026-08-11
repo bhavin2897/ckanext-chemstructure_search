@@ -12,6 +12,7 @@ from ckanext.chemstructure_search.action import (
     run_structure_search,
 )
 from ckanext.chemstructure_search.helpers import chemstructure_search_params
+from ckanext.chemstructure_search.indexing import add_molecule_names
 
 from ckanext.chemstructure_search.views import get_blueprints
 
@@ -47,6 +48,9 @@ class ChemstructureSearchPlugin(plugins.SingletonPlugin):
         return {
             "chemstructure_search_params" : chemstructure_search_params
         }
+
+    def before_index(self, pkg_dict):
+        return add_molecule_names(pkg_dict)
 
     def before_search(self, search_params):
         """
