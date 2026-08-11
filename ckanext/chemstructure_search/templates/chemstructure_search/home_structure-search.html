@@ -158,12 +158,52 @@
 </div>
 
 <style>
+  .search-tweaks-advanced-search {
+    --molecule-search-primary: #206B82;
+  }
+
   .search-options-row {
     display: flex;
     align-items: center;
-    justify-content: space-between;
+    justify-content: flex-start;
+    flex-wrap: wrap;
     gap: 16px;
     margin-top: 18px;
+  }
+
+  .advanced-search-widget .add-field,
+  .advanced-search-widget .another {
+    min-height: 38px;
+    padding: 8px 25px;
+    line-height: 20px;
+  }
+
+  .advanced-search-widget .another,
+  .structure-search-small-button {
+    color: #fff;
+    background-color: var(--molecule-search-primary);
+    border-color: var(--molecule-search-primary);
+  }
+
+  .advanced-search-widget .another:hover,
+  .structure-search-small-button:hover {
+    color: #fff;
+    filter: brightness(0.9);
+  }
+
+  .advanced-search-widget .another:focus,
+  .structure-search-small-button:focus {
+    color: #fff;
+    outline: 2px solid #fff;
+    outline-offset: -4px;
+    box-shadow: 0 0 0 2px var(--molecule-search-primary);
+  }
+
+  .advanced-search-widget .another:disabled,
+  .structure-search-small-button:disabled {
+    opacity: 0.65;
+    cursor: not-allowed;
+    filter: none;
   }
 
   .advanced-toggles {
@@ -172,7 +212,7 @@
   }
 
   .structure-search-inline {
-    margin-left: auto;
+    order: -1;
     display: flex;
     align-items: center;
   }
@@ -183,22 +223,13 @@
     justify-content: center;
     gap: 6px;
     padding: 5px 10px;
-    color: #fff;
-    background: #1f9aaa;
-    border: 1px solid #1f9aaa;
+    border: 1px solid var(--molecule-search-primary);
     border-radius: 4px;
     font-size: 14px;
     font-weight: 600;
     line-height: 1.2;
     box-shadow: none;
     cursor: pointer;
-  }
-
-  .structure-search-small-button:hover,
-  .structure-search-small-button:focus {
-    color: #fff;
-    background: #168998;
-    border-color: #168998;
   }
 
   .structure-search-small-button .fa {
@@ -470,7 +501,13 @@
     }
 
     .structure-search-inline {
-      margin-left: 0;
+      margin-right: 0;
+    }
+
+    .advanced-search-widget .add-field,
+    .advanced-search-widget .another {
+      width: auto;
+      max-width: 100%;
     }
 
     .chemstructure-search-mode {
