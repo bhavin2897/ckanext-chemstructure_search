@@ -444,17 +444,7 @@ def test_before_search_generates_existing_solr_package_name_filter(
     assert params["rows"] == 2
 
 
-@pytest.mark.parametrize("path", [
-    (
-        "/dataset/?q=2-Hydroxy-N-phenylpropanamide"
-        "&chemstructure-search-mode=similarity"
-    ),
-    (
-        "/molecule?q=ethylbenzene"
-        "&chemstructure-search-mode=similarity"
-    ),
-])
-def test_before_search_ignores_plain_text_searches(monkeypatch, path):
+def test_molecule_text_search_defaults_to_relevance(monkeypatch):
     app = Flask(__name__)
     search_plugin = plugin.ChemstructureSearchPlugin()
 
@@ -466,21 +456,77 @@ def test_before_search_ignores_plain_text_searches(monkeypatch, path):
         "run_structure_search",
         unexpected_structure_search,
     )
-    original_params = {
-        "q": "ethylbenzene",
-        "fq": "",
-        "sort": plugin.CHEMICAL_RELEVANCE_SORT,
-    }
+    original_params = {"q": "benzene", "sort": "title_string asc"}
 
-    with app.test_request_context(path):
+    with app.test_request_context(
+        "/molecule?q=benzene&sort=title_string+asc"
+    ):
         params = search_plugin.before_search(original_params)
 
     assert params is original_params
-    assert params == {
-        "q": "ethylbenzene",
-        "fq": "",
-        "sort": plugin.CHEMICAL_RELEVANCE_SORT,
+    assert params["sort"] == plugin.CHEMICAL_RELEVANCE_SORT
+
+
+@pytest.mark.parametrize("query", [None, "", "   "])
+def test_empty_molecule_listing_keeps_existing_sort(query):
+    app = Flask(__name__)
+    search_plugin = plugin.ChemstructureSearchPlugin()
+    params = {"q": query, "sort": "title_string asc"}
+
+    with app.test_request_context("/molecule"):
+        result = search_plugin.before_search(params)
+
+    assert result["sort"] == "title_string asc"
+
+
+def test_explicit_molecule_text_sort_is_preserved():
+    app = Flask(__name__)
+    search_plugin = plugin.ChemstructureSearchPlugin()
+    params = {"q": "benzene", "sort": "title_string asc"}
+
+    with app.test_request_context(
+        "/molecule?q=benzene&sort=title_string+asc"
+        "&ext_chemstructure_sort_explicit=1"
+    ):
+        result = search_plugin.before_search(params)
+
+    assert result["sort"] == "title_string asc"
+
+
+@pytest.mark.parametrize("path", [
+    "/dataset?q=benzene",
+    "/organization/example?q=benzene",
+])
+def test_non_molecule_text_search_is_unchanged(path):
+    app = Flask(__name__)
+    search_plugin = plugin.ChemstructureSearchPlugin()
+    params = {"q": "benzene", "sort": "title_string asc"}
+
+    with app.test_request_context(path):
+        result = search_plugin.before_search(params)
+
+    assert result["sort"] == "title_string asc"
+
+
+@pytest.mark.parametrize("internal_flag", [
+    "include_dataset_count",
+    "include_users",
+    "id",
+    "name",
+])
+def test_internal_molecule_text_search_is_unchanged(internal_flag):
+    app = Flask(__name__)
+    search_plugin = plugin.ChemstructureSearchPlugin()
+    params = {
+        "q": "benzene",
+        "sort": "title_string asc",
+        internal_flag: True,
     }
+
+    with app.test_request_context("/molecule?q=benzene"):
+        result = search_plugin.before_search(params)
+
+    assert result["sort"] == "title_string asc"
 
 
 def test_after_search_restores_similarity_order_and_values(monkeypatch):

@@ -21,6 +21,7 @@ log = logging.getLogger(__name__)
 
 CHEMICAL_RELEVANCE_SORT = "score desc, metadata_modified desc"
 STRUCTURE_RANK_EXTRAS_KEY = "chemstructure_search_rank"
+EXPLICIT_SORT_PARAM = "ext_chemstructure_sort_explicit"
 
 
 class ChemstructureSearchPlugin(plugins.SingletonPlugin):
@@ -74,14 +75,9 @@ class ChemstructureSearchPlugin(plugins.SingletonPlugin):
         """
 
         try:
-            structure_query = request.args.get("structure_query")
+            request_path = request.path or ""
         except RuntimeError:
             return search_params
-
-        if not structure_query:
-            return search_params
-
-        request_path = request.path or ""
 
         # Only apply this to the molecule listing page.
         if not request_path.rstrip("/").endswith("/molecule"):
@@ -97,6 +93,34 @@ class ChemstructureSearchPlugin(plugins.SingletonPlugin):
             return search_params
 
         if search_params.get("id") or search_params.get("name"):
+            return search_params
+
+        structure_query = request.args.get("structure_query")
+
+        if not structure_query:
+            text_query = search_params.get("q")
+            if text_query is None:
+                text_query = request.args.get("q")
+
+            if not text_query or not text_query.strip():
+                return search_params
+
+            requested_sort = request.args.get("sort")
+            explicit_sort = request.args.get(EXPLICIT_SORT_PARAM) == "1"
+
+            # The molecule form submits its empty-listing default sort along
+            # with a new query. Only retain that value when the dropdown was
+            # actually changed by the user.
+            if requested_sort and explicit_sort:
+                return search_params
+
+            search_params["sort"] = CHEMICAL_RELEVANCE_SORT
+            log.debug(
+                "CHEMSTRUCTURE text relevance sort query=%s sort=%s path=%s",
+                text_query,
+                search_params["sort"],
+                request_path,
+            )
             return search_params
 
         self._remove_structure_params_from_fq(search_params)

@@ -1,5 +1,35 @@
 {% ckan_extends %}
 
+{% block search_sortby %}
+{% if type == 'molecule' %}
+  {% if sorting %}
+    <div class="form-select form-group control-order-by">
+      <label for="field-order-by">{{ _('Order by') }}</label>
+      <input
+        type="hidden"
+        name="ext_chemstructure_sort_explicit"
+        value="{{ request.args.get('ext_chemstructure_sort_explicit', '') }}">
+      <select
+        id="field-order-by"
+        name="sort"
+        class="form-control"
+        onchange="this.form.elements.ext_chemstructure_sort_explicit.value='1'">
+        {% for label, value in sorting %}
+          {% if label and value %}
+            <option value="{{ value }}"{% if sorting_selected == value %} selected="selected"{% endif %}>{{ label }}</option>
+          {% endif %}
+        {% endfor %}
+      </select>
+      {% block search_sortby_button %}
+        <button class="btn btn-default js-hide" type="submit">{{ _('Go') }}</button>
+      {% endblock %}
+    </div>
+  {% endif %}
+{% else %}
+  {{ super() }}
+{% endif %}
+{% endblock %}
+
 {% block search_facets %}
 {% if facets %}
       <p class="filter-list">
