@@ -45,10 +45,8 @@ def _deduplicate_synonyms(names):
 
 def add_molecule_synonyms(search_data):
     """Add RDKit synonyms to CKAN's normal searchable catch-all field."""
-    if (
-        search_data.get("dataset_type") != "molecule"
-        and search_data.get("type") != "molecule"
-    ):
+    package_type = search_data.get("type") or search_data.get("dataset_type")
+    if package_type != "molecule":
         return search_data
 
     # PackageSearchIndex has already discarded deleted packages before this
@@ -60,6 +58,8 @@ def add_molecule_synonyms(search_data):
         search_data.get("inchi_key")
         or search_data.get("extras_inchi_key")
     )
+    if isinstance(inchi_key, str):
+        inchi_key = inchi_key.strip()
     if not inchi_key:
         return search_data
 
@@ -69,8 +69,10 @@ def add_molecule_synonyms(search_data):
         synonyms = _deduplicate_synonyms(get_molecule_synonyms(inchi_key))
     except Exception:
         log.exception(
-            "CHEMSTRUCTURE synonym indexing failed package=%s inchi_key=%s",
+            "CHEMSTRUCTURE synonym indexing failed package=%s "
+            "package_type=%s inchi_key=%s",
             package_ref,
+            package_type,
             inchi_key,
         )
         return search_data
@@ -86,9 +88,12 @@ def add_molecule_synonyms(search_data):
         ).strip()
 
     log.info(
-        "CHEMSTRUCTURE synonym indexing package=%s inchi_key=%s count=%s",
+        "CHEMSTRUCTURE synonym indexing package=%s package_type=%s "
+        "inchi_key=%s count=%s added_to_text=%s",
         package_ref,
+        package_type,
         inchi_key,
         len(synonyms),
+        bool(synonyms),
     )
     return search_data

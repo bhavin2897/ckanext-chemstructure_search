@@ -55,8 +55,9 @@ class ChemstructureSearchPlugin(plugins.SingletonPlugin):
 
     def before_dataset_index(self, search_data):
         """Add molecule synonyms to the document being sent to Solr."""
-        log.warning(
-            "CHEMSTRUCTURE before_dataset_index called package=%s type=%s dataset_type=%s inchi_key=%s",
+        log.info(
+            "CHEMSTRUCTURE before_dataset_index package=%s type=%s "
+            "dataset_type=%s inchi_key=%s",
             search_data.get("name"),
             search_data.get("type"),
             search_data.get("dataset_type"),
