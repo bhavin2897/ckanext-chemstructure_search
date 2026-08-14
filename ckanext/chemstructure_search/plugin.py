@@ -55,6 +55,13 @@ class ChemstructureSearchPlugin(plugins.SingletonPlugin):
 
     def before_dataset_index(self, search_data):
         """Add molecule synonyms to the document being sent to Solr."""
+        log.warning(
+            "CHEMSTRUCTURE before_dataset_index called package=%s type=%s dataset_type=%s inchi_key=%s",
+            search_data.get("name"),
+            search_data.get("type"),
+            search_data.get("dataset_type"),
+            search_data.get("inchi_key") or search_data.get("extras_inchi_key"),
+        )
         return add_molecule_synonyms(search_data)
 
     def before_search(self, search_params):
@@ -64,14 +71,6 @@ class ChemstructureSearchPlugin(plugins.SingletonPlugin):
         URL example:
             /molecule?structure_query=c1ccccc1&structure_mode=similarity&threshold=0.25
         """
-
-        log.warning(
-            "CHEMSTRUCTURE before_dataset_index called package=%s type=%s dataset_type=%s inchi_key=%s",
-            search_data.get("name"),
-            search_data.get("type"),
-            search_data.get("dataset_type"),
-            search_data.get("inchi_key") or search_data.get("extras_inchi_key"),
-        )
 
         try:
             structure_query = request.args.get("structure_query")
