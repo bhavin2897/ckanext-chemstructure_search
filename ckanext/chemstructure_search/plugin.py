@@ -12,7 +12,7 @@ from ckanext.chemstructure_search.action import (
     run_structure_search,
 )
 from ckanext.chemstructure_search.helpers import chemstructure_search_params
-from ckanext.chemstructure_search.indexing import add_molecule_names
+from ckanext.chemstructure_search.indexing import add_molecule_synonyms
 
 from ckanext.chemstructure_search.views import get_blueprints
 
@@ -50,7 +50,12 @@ class ChemstructureSearchPlugin(plugins.SingletonPlugin):
         }
 
     def before_index(self, pkg_dict):
-        return add_molecule_names(pkg_dict)
+        """CKAN 2.9 IPackageController indexing hook."""
+        return self.before_dataset_index(pkg_dict)
+
+    def before_dataset_index(self, search_data):
+        """Add molecule synonyms to the document being sent to Solr."""
+        return add_molecule_synonyms(search_data)
 
     def before_search(self, search_params):
         """

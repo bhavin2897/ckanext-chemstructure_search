@@ -7,80 +7,88 @@ import ckan.model as model
 
 log = logging.getLogger(__name__)
 
-MOLECULE_NAMES_FIELD = "molecule_names"
 
-
-def is_molecule_package(pkg_dict):
-    """Recognize molecule packages in CKAN's flattened index dictionary."""
-    return (
-        pkg_dict.get("dataset_type") == "molecule"
-        or pkg_dict.get("type") == "molecule"
-    )
-
-
-def get_alternate_names(package_id, inchi_key=None):
-    """Return names for a package, falling back to its flattened InChIKey.
-
-    ``molecule_rel_data.molecules_id`` is the deployed relation column.  It
-    references ``rdk.molecules.id``; names use the cartridge-facing
-    ``rdk.molecules.molecule_id`` identifier.
-    """
+def get_molecule_synonyms(inchi_key):
+    """Return the non-empty names belonging to an RDKit molecule."""
     query = text("""
-        WITH related_molecules AS (
-            SELECT DISTINCT molecule.molecule_id
-            FROM public.molecule_rel_data AS relation
-            JOIN rdk.molecules AS molecule
-              ON molecule.id = relation.molecules_id
-            WHERE relation.package_id = :package_id
-        ),
-        resolved_molecules AS (
-            SELECT molecule_id
-            FROM related_molecules
-
-            UNION ALL
-
-            SELECT molecule.molecule_id
-            FROM rdk.molecules AS molecule
-            WHERE molecule.inchi_key = :inchi_key
-              AND NOT EXISTS (SELECT 1 FROM related_molecules)
-        )
-        SELECT names.name
-        FROM (
-            SELECT DISTINCT molecule_name.name
-            FROM resolved_molecules AS resolved
-            JOIN rdk.molecule_names AS molecule_name
-              ON molecule_name.molecule_id = resolved.molecule_id
-            WHERE molecule_name.name IS NOT NULL
-              AND btrim(molecule_name.name) <> ''
-        ) AS names
-        ORDER BY lower(names.name), names.name
+        SELECT DISTINCT mn.name
+        FROM rdk.molecules AS rm
+        JOIN rdk.molecule_names AS mn
+          ON mn.molecule_id = rm.molecule_id
+        WHERE rm.inchi_key = :inchi_key
+          AND mn.name IS NOT NULL
+          AND btrim(mn.name) <> ''
+        ORDER BY mn.name
     """)
-    rows = model.Session.execute(query, {
-        "package_id": package_id,
-        "inchi_key": inchi_key,
-    })
+    rows = model.Session.execute(query, {"inchi_key": inchi_key})
     return [row[0] for row in rows]
 
 
-def add_molecule_names(pkg_dict):
-    """Add database-backed names without disturbing the flattened document."""
-    if not is_molecule_package(pkg_dict):
-        return pkg_dict
+def _deduplicate_synonyms(names):
+    """Strip and deduplicate names case-insensitively in stable order."""
+    unique = {}
 
-    package_id = pkg_dict.get("id")
-    if not package_id:
-        return pkg_dict
+    for name in names:
+        if name is None:
+            continue
 
-    inchi_key = pkg_dict.get("inchi_key") or pkg_dict.get("extras_inchi_key")
+        stripped_name = name.strip()
+        if not stripped_name:
+            continue
+
+        key = stripped_name.casefold()
+        if key not in unique:
+            unique[key] = stripped_name
+
+    return sorted(unique.values(), key=lambda value: (value.casefold(), value))
+
+
+def add_molecule_synonyms(search_data):
+    """Add RDKit synonyms to CKAN's normal searchable catch-all field."""
+    if (
+        search_data.get("dataset_type") != "molecule"
+        and search_data.get("type") != "molecule"
+    ):
+        return search_data
+
+    # PackageSearchIndex has already discarded deleted packages before this
+    # hook. Explicitly avoid indexing any other non-active package state too.
+    if search_data.get("state") != "active":
+        return search_data
+
+    inchi_key = (
+        search_data.get("inchi_key")
+        or search_data.get("extras_inchi_key")
+    )
+    if not inchi_key:
+        return search_data
+
+    package_ref = search_data.get("name") or search_data.get("id") or "unknown"
 
     try:
-        names = get_alternate_names(package_id, inchi_key)
+        synonyms = _deduplicate_synonyms(get_molecule_synonyms(inchi_key))
     except Exception:
         log.exception(
-            "CHEMSTRUCTURE failed to index molecule names for package %s",
-            package_id,
+            "CHEMSTRUCTURE synonym indexing failed package=%s inchi_key=%s",
+            package_ref,
+            inchi_key,
         )
-        return pkg_dict
+        return search_data
 
-    pkg_dict[MOLECULE_NAMES_FIELD] = names
-    return pkg_dict
+    if synonyms:
+        existing_text = search_data.get("text") or ""
+        if isinstance(existing_text, (list, tuple)):
+            existing_text = " ".join(str(value) for value in existing_text)
+        synonym_text = " ".join(synonyms)
+        search_data["text"] = "{} {}".format(
+            existing_text,
+            synonym_text,
+        ).strip()
+
+    log.info(
+        "CHEMSTRUCTURE synonym indexing package=%s inchi_key=%s count=%s",
+        package_ref,
+        inchi_key,
+        len(synonyms),
+    )
+    return search_data
