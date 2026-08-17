@@ -97,30 +97,37 @@ def _upsert_molecule(session, values):
     row = session.execute(
         text("""
             INSERT INTO rdk.molecules (
-                m, molecule, canonical_smiles, inchi_key, inchi_code,
-                mol_formula, exact_mass
-            )
-            VALUES (
-                mol_from_smiles(CAST(:canonical_smiles AS cstring)),
-                mol_from_smiles(CAST(:canonical_smiles AS cstring)),
-                :canonical_smiles, :inchi_key, :inchi_code,
-                :mol_formula, :exact_mass
-            )
-            ON CONFLICT (inchi_code) DO UPDATE SET
-                m = EXCLUDED.m,
-                molecule = EXCLUDED.molecule,
-                canonical_smiles = EXCLUDED.canonical_smiles,
-                inchi_key = COALESCE(
-                    NULLIF(EXCLUDED.inchi_key, ''), rdk.molecules.inchi_key
-                ),
-                mol_formula = COALESCE(
-                    NULLIF(EXCLUDED.mol_formula, ''),
-                    rdk.molecules.mol_formula
-                ),
-                exact_mass = COALESCE(
-                    EXCLUDED.exact_mass, rdk.molecules.exact_mass
-                )
-            RETURNING molecule_id
+    molecule,
+    canonical_smiles,
+    inchi_key,
+    inchi_code,
+    mol_formula,
+    exact_mass
+)
+VALUES (
+    mol_from_smiles(CAST(:canonical_smiles AS cstring)),
+    :canonical_smiles,
+    :inchi_key,
+    :inchi_code,
+    :mol_formula,
+    :exact_mass
+)
+ON CONFLICT (inchi_code) DO UPDATE SET
+    molecule = EXCLUDED.molecule,
+    canonical_smiles = EXCLUDED.canonical_smiles,
+    inchi_key = COALESCE(
+        NULLIF(EXCLUDED.inchi_key, ''),
+        rdk.molecules.inchi_key
+    ),
+    mol_formula = COALESCE(
+        NULLIF(EXCLUDED.mol_formula, ''),
+        rdk.molecules.mol_formula
+    ),
+    exact_mass = COALESCE(
+        EXCLUDED.exact_mass,
+        rdk.molecules.exact_mass
+    )
+RETURNING molecule_id
         """),
         values,
     ).fetchone()
