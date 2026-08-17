@@ -13,6 +13,8 @@ from ckanext.chemstructure_search.action import (
 )
 from ckanext.chemstructure_search.helpers import chemstructure_search_params
 from ckanext.chemstructure_search.indexing import add_molecule_synonyms
+from ckanext.chemstructure_search.sync import sync_molecule_package_safely
+from ckanext.chemstructure_search import cli
 
 from ckanext.chemstructure_search.views import get_blueprints
 
@@ -28,6 +30,7 @@ class ChemstructureSearchPlugin(plugins.SingletonPlugin):
     plugins.implements(plugins.IConfigurer)
     plugins.implements(plugins.IBlueprint)
     plugins.implements(plugins.IActions)
+    plugins.implements(plugins.IClick)
     plugins.implements(plugins.IPackageController, inherit=True)
     plugins.implements(plugins.ITemplateHelpers,inherit=True)
 
@@ -45,6 +48,9 @@ class ChemstructureSearchPlugin(plugins.SingletonPlugin):
             "chemstructure_render_query_image" : chemstructure_render_query_image,
         }
 
+    def get_commands(self):
+        return cli.get_commands()
+
     def get_helpers(self):
         return {
             "chemstructure_search_params" : chemstructure_search_params
@@ -53,6 +59,14 @@ class ChemstructureSearchPlugin(plugins.SingletonPlugin):
     def before_index(self, pkg_dict):
         """CKAN 2.9 IPackageController indexing hook."""
         return self.before_dataset_index(pkg_dict)
+
+    def after_create(self, context, pkg_dict):
+        """Synchronize a newly created molecule inside CKAN's transaction."""
+        sync_molecule_package_safely(context, pkg_dict)
+
+    def after_update(self, context, pkg_dict):
+        """Refresh an updated molecule inside CKAN's transaction."""
+        sync_molecule_package_safely(context, pkg_dict)
 
     def before_dataset_index(self, search_data):
         """Add molecule synonyms to the document being sent to Solr."""

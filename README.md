@@ -7,6 +7,44 @@ This plugin provides a structure search page where users can sketch a chemical s
 
 ### Current features
 * Adds a CKAN structure search page.
+
+## CKAN to RDKit synchronization
+
+With the `chemstructure_search` plugin enabled, CKAN 2.9 package creation and
+update hooks synchronize active `type=molecule` packages into
+`rdk.molecules`, `rdk.fingerprints`, and `rdk.molecule_names`. CKAN remains the
+source of truth. The hook performs no network requests and never invokes
+`package_update`; names copied from `alternate_name` use type
+`alternate_name` and source `CKAN`. Existing names from PubChem or other
+sources are not removed.
+
+The package must contain valid `smiles` and `inchi` values. Values may be
+Scheming top-level fields or CKAN extras. Invalid records are logged by package
+ID/name and do not abort an unrelated harvest.
+
+Backfill safely before enabling writes in production:
+
+```bash
+ckan -c /etc/ckan/default/ckan.ini chemstructure sync \
+  --dry-run --batch-size 100 --failure-log /var/tmp/rdkit-dry-run.jsonl
+```
+
+After reviewing the dry-run failures, run the real reconciliation:
+
+```bash
+ckan -c /etc/ckan/default/ckan.ini chemstructure sync \
+  --batch-size 100 --failure-log /var/tmp/rdkit-sync.jsonl
+```
+
+Use `--limit N` for a bounded run and `--start-after PACKAGE_NAME` to resume
+after the last package name printed by a completed batch. Reruns are
+idempotent. Dry-run rolls back each batch and does not retain database changes.
+
+Read-only consistency counts are available with:
+
+```bash
+ckan -c /etc/ckan/default/ckan.ini chemstructure verify
+```
 * Embeds a local Ketcher editor build in the UI.
 * Exports drawn chemical structures as SMILES.
 * Sends SMILES queries to a CKAN action.
