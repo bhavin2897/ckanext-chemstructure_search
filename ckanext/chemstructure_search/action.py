@@ -424,7 +424,7 @@ def _inspect_rdkit_schema(mode):
 def _validate_smiles_query_in_database(query, functions):
     sql = text("""
         WITH query_molecule AS (
-            SELECT {mol_from_smiles}(:query) AS molecule
+            SELECT {mol_from_smiles}(CAST(:query AS cstring)) AS molecule
         )
         SELECT {mol_to_smiles}(molecule) AS query_canonical_smiles
         FROM query_molecule
@@ -456,7 +456,7 @@ def _validate_smiles_query_in_database(query, functions):
 def _validate_smarts_query_in_database(query, smarts_function):
     sql = text("""
         WITH query_pattern AS (
-            SELECT {smarts_function}(:query) AS pattern
+            SELECT {smarts_function}(CAST(:query AS cstring)) AS pattern
         )
         SELECT TRUE AS valid
         FROM query_pattern
@@ -609,7 +609,7 @@ def _build_exact_sql(metadata, rows):
 
     return text("""
         WITH query_molecule AS (
-            SELECT {mol_from_smiles}(:query) AS molecule
+            SELECT {mol_from_smiles}(CAST(:query AS cstring)) AS molecule
         ),
         hits AS (
             SELECT
@@ -661,7 +661,7 @@ def _build_substructure_sql(metadata, rows):
 
     return text("""
         WITH query_molecule AS (
-            SELECT {mol_from_smiles}(:query) AS molecule
+            SELECT {mol_from_smiles}(CAST(:query AS cstring)) AS molecule
         ),
         query_data AS (
             SELECT
@@ -726,7 +726,7 @@ def _build_smarts_sql(metadata, rows):
 
     return text("""
         WITH query_pattern AS (
-            SELECT {smarts_function}(:query) AS pattern
+            SELECT {smarts_function}(CAST(:query AS cstring)) AS pattern
         ),
         hits AS (
             SELECT
@@ -788,7 +788,7 @@ def _build_similarity_sql(metadata, rows):
 
     return text("""
         WITH query_molecule AS (
-            SELECT {mol_from_smiles}(:query) AS molecule
+            SELECT {mol_from_smiles}(CAST(:query AS cstring)) AS molecule
         ),
         query_fingerprint AS (
             SELECT

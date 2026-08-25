@@ -153,7 +153,9 @@ def test_smarts_substructure_matching_uses_contains_operator(monkeypatch):
 def test_smarts_matching_uses_confirmed_smarts_function(monkeypatch):
     result, sql, params, _calls = run_with_captured_sql(monkeypatch, "smarts")
 
-    assert '"public"."qmol_from_smarts"(:query)' in sql
+    assert (
+        '"public"."qmol_from_smarts"(CAST(:query AS cstring))' in sql
+    )
     assert "m.molecule @> q.pattern" in sql
     assert result["query_canonical_smiles"] is None
     assert params["query"] == "[#6]"
