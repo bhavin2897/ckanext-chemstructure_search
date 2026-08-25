@@ -500,7 +500,43 @@ def _normalize_smarts_aromaticity(query):
         return query
 
     try:
-        Chem.SanitizeMol(pattern)
+        # QueryAtom instances are deliberately not sanitized like ordinary
+        # atoms, so sanitizing ``pattern`` itself does not reliably perceive
+        # a Ketcher-exported alternating ring as aromatic.  Build a temporary
+        # ordinary molecule with the same graph and bond orders, perceive
+        # aromaticity there, and copy only those flags back to the SMARTS.
+        # Query predicates on the original atoms (wildcards, lists, negation,
+        # hydrogen counts, and so on) are therefore preserved.
+        probe = Chem.RWMol()
+
+        for atom in pattern.GetAtoms():
+            atomic_number = atom.GetAtomicNum() or 6
+            probe_atom = Chem.Atom(atomic_number)
+            probe_atom.SetFormalCharge(atom.GetFormalCharge())
+            probe.AddAtom(probe_atom)
+
+        for bond in pattern.GetBonds():
+            probe.AddBond(
+                bond.GetBeginAtomIdx(),
+                bond.GetEndAtomIdx(),
+                bond.GetBondType(),
+            )
+
+        probe = probe.GetMol()
+        Chem.SanitizeMol(probe)
+
+        for atom in probe.GetAtoms():
+            if atom.GetIsAromatic():
+                pattern.GetAtomWithIdx(atom.GetIdx()).SetIsAromatic(True)
+
+        for bond in probe.GetBonds():
+            if not bond.GetIsAromatic():
+                continue
+
+            pattern_bond = pattern.GetBondWithIdx(bond.GetIdx())
+            pattern_bond.SetIsAromatic(True)
+            pattern_bond.SetBondType(Chem.BondType.AROMATIC)
+
         return Chem.MolToSmarts(pattern)
     except Exception:
         log.debug(
@@ -874,6 +910,12 @@ def _run_structure_search_cartridge(query, mode, threshold, rows):
         if mode == "substructure"
         else query
     )
+    if database_query != query:
+        log.info(
+            "CHEMSTRUCTURE normalized substructure SMARTS original=%s normalized=%s",
+            query,
+            database_query,
+        )
     query_canonical_smiles = _validate_structure_query_in_database(
         database_query,
         mode,
