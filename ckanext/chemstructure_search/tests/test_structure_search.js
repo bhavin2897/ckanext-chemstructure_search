@@ -44,7 +44,8 @@ function createPage(options) {
   const storage = new Map([
     ["chemstructure_last_query", options.storedSmiles || ""],
     ["chemstructure_last_mode", options.mode || "similarity"],
-    ["chemstructure_last_threshold", "0.25"]
+    ["chemstructure_last_threshold", "0.25"],
+    ["chemstructure_last_ket", options.storedKet || ""]
   ]);
   const input = element(options.input || "");
   const message = element();
@@ -55,17 +56,26 @@ function createPage(options) {
   const thresholdValue = element();
   const thresholdWrapper = element();
   const overlay = element();
-  const modes = ["exact", "similarity", "substructure"].map(function (mode) {
-    const radio = element(mode);
-    radio.checked = mode === (options.mode || "similarity");
-    return radio;
-  });
+  const modes = ["exact", "similarity", "substructure"].map(
+    function (mode) {
+      const radio = element(mode);
+      radio.checked = mode === (options.mode || "similarity");
+      return radio;
+    }
+  );
   const ketcher = {
     getSmiles: async function () {
       return smiles;
     },
+    getSmarts: async function () {
+      return options.smarts === undefined ? smiles : options.smarts;
+    },
+    getKet: async function () {
+      return options.ket || "";
+    },
     setMolecule: async function (value) {
       smiles = value;
+      this.loadedStructure = value;
     },
     editor: {
       clear: async function () {
@@ -189,7 +199,8 @@ test("custom Clear immediately resets editor, field, cache, and stale search", a
   assert.equal(page.input.value, "");
   assert.equal(page.storage.has("chemstructure_last_query"), false);
 
-  await click(page.search);
+  click(page.search);
+  await new Promise(setImmediate);
   assert.equal(page.location.href, "");
   assert.match(page.message.innerHTML, /Please draw a structure/);
 
@@ -199,7 +210,7 @@ test("custom Clear immediately resets editor, field, cache, and stale search", a
   assert.equal(page.input.value, "");
 });
 
-for (const mode of ["exact", "substructure", "similarity"]) {
+for (const mode of ["exact", "similarity"]) {
   test("after clearing, " + mode + " search uses only the newly drawn structure", async function () {
     const page = createPage({
       smiles: "CCc1ccccc1",
@@ -223,6 +234,38 @@ for (const mode of ["exact", "substructure", "similarity"]) {
     assert.equal(page.location.href.includes("CCc1ccccc1"), false);
   });
 }
+
+test("substructure mode exports SMARTS from Ketcher", async function () {
+  const page = createPage({
+    smiles: "C1=C(*)C=CC=C1 |$;;;;;;$|",
+    smarts: "c1ccccc1*",
+    ket: '{"root":{"nodes":[{"type":"atom","label":"A"}]}}',
+    mode: "substructure"
+  });
+
+  click(page.search);
+  await new Promise(setImmediate);
+
+  const query = new URL(page.location.href, "http://example.test").searchParams;
+  assert.equal(query.get("structure_query"), "c1ccccc1*");
+  assert.equal(query.get("structure_mode"), "substructure");
+  assert.match(page.storage.get("chemstructure_last_ket"), /"label":"A"/);
+});
+
+test("reopening Ketcher restores its KET document", async function () {
+  const ket = '{"root":{"nodes":[{"type":"atom","label":"A"}]}}';
+  const page = createPage({
+    storedSmiles: "[*]",
+    storedKet: ket,
+    mode: "substructure"
+  });
+
+  await page.intervals[1]();
+  await new Promise(setImmediate);
+
+  assert.equal(page.ketcher.loadedStructure, ket);
+  assert.equal(page.input.value, "[*]");
+});
 
 test("empty editor does not erase a text-entered SMILES/SMARTS query", async function () {
   const page = createPage({ input: "[#6]" });

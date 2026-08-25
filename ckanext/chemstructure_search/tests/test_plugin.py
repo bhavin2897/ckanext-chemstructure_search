@@ -134,13 +134,13 @@ def test_exact_matching_uses_cartridge_operator(monkeypatch):
     assert params["rows"] == 25
 
 
-def test_smiles_substructure_matching_uses_contains_operator(monkeypatch):
+def test_smarts_substructure_matching_uses_contains_operator(monkeypatch):
     result, sql, _params, _calls = run_with_captured_sql(
         monkeypatch,
         "substructure",
     )
 
-    assert "m.molecule @> q.molecule" in sql
+    assert "m.molecule @> q.pattern" in sql
     assert "LEFT JOIN rdk.fingerprints f" in sql
     assert "ON f.molecule_id = m.molecule_id" in sql
     assert '"public"."morganbv_fp"(molecule)' in sql
@@ -327,7 +327,7 @@ def test_missing_rdk_molecules_raises_validation_error(monkeypatch):
         action._inspect_rdkit_schema("exact")
 
 
-@pytest.mark.parametrize("mode", ["similarity", "substructure"])
+@pytest.mark.parametrize("mode", ["similarity"])
 def test_missing_rdk_fingerprints_raises_for_ranked_modes(
     monkeypatch,
     mode,

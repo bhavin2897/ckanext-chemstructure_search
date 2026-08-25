@@ -8,6 +8,7 @@
   var CHEMSTRUCTURE_LAST_QUERY_KEY = "chemstructure_last_query";
   var CHEMSTRUCTURE_LAST_MODE_KEY = "chemstructure_last_mode";
   var CHEMSTRUCTURE_LAST_THRESHOLD_KEY = "chemstructure_last_threshold";
+  var CHEMSTRUCTURE_LAST_KET_KEY = "chemstructure_last_ket";
 
   var DEFAULT_MODE = "similarity";
   var DEFAULT_THRESHOLD = "0.25";
@@ -115,7 +116,7 @@
     return numberValue.toFixed(2);
   }
 
-  async function getSmilesFromKetcherSilently() {
+  async function getStructureFromKetcherSilently(mode) {
     var iframe = document.getElementById("ketcher-frame");
 
     if (!iframe || !iframe.contentWindow || !iframe.contentWindow.ketcher) {
@@ -123,24 +124,64 @@
     }
 
     try {
-      var smiles = await iframe.contentWindow.ketcher.getSmiles();
+      var ketcher = iframe.contentWindow.ketcher;
+      var format = mode === "substructure" ? "SMARTS" : "SMILES";
+      var structure;
 
-      if (!smiles || !smiles.trim()) {
+      if (mode === "substructure") {
+        if (typeof ketcher.getSmarts !== "function") {
+          console.warn(
+            "CHEMSTRUCTURE: This Ketcher version does not support SMARTS export."
+          );
+          return null;
+        }
+
+        structure = await ketcher.getSmarts();
+      } else {
+        structure = await ketcher.getSmiles();
+      }
+
+      if (!structure || !structure.trim()) {
         return "";
       }
 
-      smiles = smiles.trim();
+      structure = structure.trim();
 
-      if (isMolfileLike(smiles)) {
+      if (isMolfileLike(structure)) {
         console.warn(
-          "CHEMSTRUCTURE: Ignoring molfile-like value returned as SMILES."
+          "CHEMSTRUCTURE: Ignoring molfile-like value returned as " +
+            format +
+            "."
         );
         return null;
       }
 
-      return smiles;
+      return structure;
     } catch (err) {
-      console.warn("CHEMSTRUCTURE: Could not read SMILES from Ketcher:", err);
+      console.warn(
+        "CHEMSTRUCTURE: Could not read " +
+          (mode === "substructure" ? "SMARTS" : "SMILES") +
+          " from Ketcher:",
+        err
+      );
+      return null;
+    }
+  }
+
+  async function getKetFromKetcherSilently() {
+    var iframe = document.getElementById("ketcher-frame");
+    var ketcher = iframe && iframe.contentWindow
+      ? iframe.contentWindow.ketcher
+      : null;
+
+    if (!ketcher || typeof ketcher.getKet !== "function") {
+      return null;
+    }
+
+    try {
+      return await ketcher.getKet();
+    } catch (err) {
+      console.warn("CHEMSTRUCTURE: Could not preserve Ketcher document:", err);
       return null;
     }
   }
@@ -152,7 +193,8 @@
       return null;
     }
 
-    var smiles = await getSmilesFromKetcherSilently();
+    var mode = getSelectedSearchMode();
+    var smiles = await getStructureFromKetcherSilently(mode);
 
     if (smiles === null) {
       return null;
@@ -172,7 +214,12 @@
     chemstructureLastSmiles = smiles;
     input.value = smiles;
 
-    console.log("CHEMSTRUCTURE: SMILES auto-updated:", smiles);
+    console.log(
+      "CHEMSTRUCTURE: " +
+        (mode === "substructure" ? "SMARTS" : "SMILES") +
+        " auto-updated:",
+      smiles
+    );
 
     return smiles;
   }
@@ -281,7 +328,7 @@
     wrapper.style.display = mode === "similarity" ? "flex" : "none";
   }
 
-  function saveLastStructureSearch(query, mode, threshold) {
+  function saveLastStructureSearch(query, mode, threshold, ket) {
     try {
       window.localStorage.setItem(CHEMSTRUCTURE_LAST_QUERY_KEY, query || "");
       window.localStorage.setItem(
@@ -292,6 +339,11 @@
         CHEMSTRUCTURE_LAST_THRESHOLD_KEY,
         normalizeThreshold(threshold || DEFAULT_THRESHOLD)
       );
+      if (ket) {
+        window.localStorage.setItem(CHEMSTRUCTURE_LAST_KET_KEY, ket);
+      } else {
+        window.localStorage.removeItem(CHEMSTRUCTURE_LAST_KET_KEY);
+      }
     } catch (err) {
       console.warn("CHEMSTRUCTURE: Could not save last search:", err);
     }
@@ -302,6 +354,7 @@
       window.localStorage.removeItem(CHEMSTRUCTURE_LAST_QUERY_KEY);
       window.localStorage.removeItem(CHEMSTRUCTURE_LAST_MODE_KEY);
       window.localStorage.removeItem(CHEMSTRUCTURE_LAST_THRESHOLD_KEY);
+      window.localStorage.removeItem(CHEMSTRUCTURE_LAST_KET_KEY);
     } catch (err) {
       console.warn("CHEMSTRUCTURE: Could not clear last search:", err);
     }
@@ -329,6 +382,16 @@
     var fromUrl = getStructureSearchFromUrl();
 
     if (fromUrl) {
+      try {
+        if (
+          window.localStorage.getItem(CHEMSTRUCTURE_LAST_QUERY_KEY) ===
+          fromUrl.query
+        ) {
+          fromUrl.ket = window.localStorage.getItem(CHEMSTRUCTURE_LAST_KET_KEY);
+        }
+      } catch (err) {
+        console.warn("CHEMSTRUCTURE: Could not restore Ketcher document:", err);
+      }
       return fromUrl;
     }
 
@@ -338,6 +401,7 @@
       var threshold = window.localStorage.getItem(
         CHEMSTRUCTURE_LAST_THRESHOLD_KEY
       );
+      var ket = window.localStorage.getItem(CHEMSTRUCTURE_LAST_KET_KEY);
 
       if (!query) {
         return null;
@@ -346,7 +410,8 @@
       return {
         query: query,
         mode: mode || DEFAULT_MODE,
-        threshold: normalizeThreshold(threshold || DEFAULT_THRESHOLD)
+        threshold: normalizeThreshold(threshold || DEFAULT_THRESHOLD),
+        ket: ket
       };
     } catch (err) {
       console.warn("CHEMSTRUCTURE: Could not read last search:", err);
@@ -354,10 +419,10 @@
     }
   }
 
-  function redirectToMoleculeStructureSearch(query, mode) {
+  function redirectToMoleculeStructureSearch(query, mode, ket) {
     var threshold = mode === "similarity" ? getSelectedThreshold() : "";
 
-    saveLastStructureSearch(query, mode, threshold);
+    saveLastStructureSearch(query, mode, threshold, ket);
 
     var params = new URLSearchParams();
 
@@ -491,7 +556,7 @@
     updateThresholdVisibility();
     updateThresholdValueLabel();
 
-    restoreMoleculeInKetcher(lastSearch.query);
+    restoreMoleculeInKetcher(lastSearch.ket || lastSearch.query);
   }
 
   async function runSearch(modeOverride) {
@@ -506,18 +571,28 @@
       return;
     }
 
-    var smilesFromKetcher = null;
+    var mode = modeOverride || getSelectedSearchMode();
+    var structureFromKetcher = null;
+    var ketFromKetcher = null;
 
     if (!chemstructureClearInProgress) {
-      smilesFromKetcher = await getSmilesFromKetcherSilently();
+      structureFromKetcher = await getStructureFromKetcherSilently(mode);
+      ketFromKetcher = await getKetFromKetcherSilently();
     }
 
-    if (smilesFromKetcher) {
-      input.value = smilesFromKetcher;
-      chemstructureLastSmiles = smilesFromKetcher;
+    if (mode === "substructure" && structureFromKetcher === null) {
+      showMessage(
+        "SMARTS export is not available in this Ketcher version.",
+        "danger"
+      );
+      return;
     }
 
-    var mode = modeOverride || getSelectedSearchMode();
+    if (structureFromKetcher) {
+      input.value = structureFromKetcher;
+      chemstructureLastSmiles = structureFromKetcher;
+    }
+
     var query = input.value.trim();
 
     if (!query || isMolfileLike(query)) {
@@ -529,7 +604,7 @@
     }
 
     setSearchLoading(true);
-    redirectToMoleculeStructureSearch(query, mode);
+    redirectToMoleculeStructureSearch(query, mode, ketFromKetcher);
   }
 
   async function clearKetcher() {

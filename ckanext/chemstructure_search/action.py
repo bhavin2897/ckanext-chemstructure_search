@@ -18,7 +18,7 @@ RDLogger.DisableLog("rdApp.error")
 log = logging.getLogger(__name__)
 
 VALID_SEARCH_MODES = ("exact", "substructure", "smarts", "similarity")
-FINGERPRINT_RANKED_MODES = ("similarity", "substructure")
+FINGERPRINT_RANKED_MODES = ("similarity",)
 DEFAULT_ROWS = 50
 DEFAULT_THRESHOLD = 0.25
 
@@ -386,7 +386,7 @@ def _inspect_rdkit_schema(mode):
 
         smarts_function = None
 
-        if mode == "smarts":
+        if mode in ("smarts", "substructure"):
             smarts_function = functions.get("qmol_from_smarts") or (
                 functions.get("mol_from_smarts")
             )
@@ -483,7 +483,7 @@ def _validate_smarts_query_in_database(query, smarts_function):
 
 
 def _validate_structure_query_in_database(query, mode, metadata):
-    if mode == "smarts":
+    if mode in ("smarts", "substructure"):
         return _validate_smarts_query_in_database(
             query,
             metadata["smarts_function"],
@@ -785,7 +785,7 @@ def _build_search_sql(mode, metadata, rows):
         return _build_exact_sql(metadata, rows)
 
     if mode == "substructure":
-        return _build_substructure_sql(metadata, rows)
+        return _build_smarts_sql(metadata, rows)
 
     if mode == "smarts":
         return _build_smarts_sql(metadata, rows)
