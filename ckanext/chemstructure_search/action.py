@@ -498,7 +498,7 @@ def _generalize_kekule_ring_bonds(query):
 
     try:
         Chem.GetSymmSSSR(pattern)
-        changed = False
+        generalized_bond_indexes = set()
 
         for atom_ring in pattern.GetRingInfo().AtomRings():
             ring_bonds = []
@@ -535,11 +535,26 @@ def _generalize_kekule_ring_bonds(query):
             ):
                 continue
 
-            for bond in ring_bonds:
-                bond.SetBondType(Chem.rdchem.BondType.UNSPECIFIED)
-            changed = True
+            generalized_bond_indexes.update(
+                bond.GetIdx() for bond in ring_bonds
+            )
 
-        return Chem.MolToSmarts(pattern) if changed else query
+        if not generalized_bond_indexes:
+            return query
+
+        editable_pattern = Chem.RWMol(pattern)
+
+        for bond_index in generalized_bond_indexes:
+            # Changing BondType on a QueryBond changes only its display type;
+            # its original BondOrder query remains active. Replace the whole
+            # query bond so MolToSmarts emits and PostgreSQL evaluates ``~``.
+            editable_pattern.ReplaceBond(
+                bond_index,
+                Chem.BondFromSmarts("~"),
+                preserveProps=False,
+            )
+
+        return Chem.MolToSmarts(editable_pattern)
     except Exception:
         log.exception(
             "CHEMSTRUCTURE failed to generalize Ketcher ring SMARTS"
