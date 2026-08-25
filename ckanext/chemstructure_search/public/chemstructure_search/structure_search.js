@@ -116,7 +116,44 @@
     return numberValue.toFixed(2);
   }
 
-  async function getStructureFromKetcherSilently(mode) {
+  async function aromatizeKetcherForSubstructure(ketcher, initialSmarts) {
+    var iframe = document.getElementById("ketcher-frame");
+    var iframeDocument = iframe && iframe.contentWindow
+      ? iframe.contentWindow.document
+      : null;
+    var aromatizeButton = iframeDocument
+      ? iframeDocument.querySelector('[data-testid="Aromatize button"]')
+      : null;
+
+    if (!aromatizeButton || aromatizeButton.disabled) {
+      return initialSmarts;
+    }
+
+    aromatizeButton.click();
+
+    /*
+     * Ketcher's Aromatize tool is asynchronous in standalone mode. Poll the
+     * documented SMARTS exporter until the operation changes the structure,
+     * with a bounded wait so non-aromatic queries are not delayed forever.
+     */
+    var latestSmarts = initialSmarts;
+
+    for (var attempt = 0; attempt < 10; attempt += 1) {
+      await new Promise(function (resolve) {
+        window.setTimeout(resolve, 100);
+      });
+
+      latestSmarts = (await ketcher.getSmarts() || "").trim();
+
+      if (latestSmarts && latestSmarts !== initialSmarts) {
+        return latestSmarts;
+      }
+    }
+
+    return latestSmarts || initialSmarts;
+  }
+
+  async function getStructureFromKetcherSilently(mode, aromatize) {
     var iframe = document.getElementById("ketcher-frame");
 
     if (!iframe || !iframe.contentWindow || !iframe.contentWindow.ketcher) {
@@ -137,6 +174,12 @@
         }
 
         structure = await ketcher.getSmarts();
+        if (aromatize) {
+          structure = await aromatizeKetcherForSubstructure(
+            ketcher,
+            (structure || "").trim()
+          );
+        }
       } else {
         structure = await ketcher.getSmiles();
       }
@@ -194,7 +237,7 @@
     }
 
     var mode = getSelectedSearchMode();
-    var smiles = await getStructureFromKetcherSilently(mode);
+    var smiles = await getStructureFromKetcherSilently(mode, false);
 
     if (smiles === null) {
       return null;
@@ -576,7 +619,7 @@
     var ketFromKetcher = null;
 
     if (!chemstructureClearInProgress) {
-      structureFromKetcher = await getStructureFromKetcherSilently(mode);
+      structureFromKetcher = await getStructureFromKetcherSilently(mode, true);
       ketFromKetcher = await getKetFromKetcherSilently();
     }
 

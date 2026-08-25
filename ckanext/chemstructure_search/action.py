@@ -482,70 +482,6 @@ def _validate_smarts_query_in_database(query, smarts_function):
     return None
 
 
-def _normalize_smarts_aromaticity(query):
-    """Aromatize Kekule-style SMARTS while preserving query atom features.
-
-    Ketcher exports query atoms and atom lists correctly via ``getSmarts()``,
-    but a ring drawn with alternating bonds can be exported in Kekule form.
-    Stored RDKit molecules use aromatic atoms/bonds, so the unnormalized query
-    would miss aromatic targets.  RDKit sanitization restores aromatic bond
-    types and ``MolToSmarts`` retains wildcard/list query semantics.
-
-    PostgreSQL remains the authority for SMARTS validation.  If local RDKit
-    cannot normalize a valid cartridge-specific pattern, use it unchanged.
-    """
-    pattern = Chem.MolFromSmarts(query)
-
-    if pattern is None:
-        return query
-
-    try:
-        # QueryAtom instances are deliberately not sanitized like ordinary
-        # atoms, so sanitizing ``pattern`` itself does not reliably perceive
-        # a Ketcher-exported alternating ring as aromatic.  Build a temporary
-        # ordinary molecule with the same graph and bond orders, perceive
-        # aromaticity there, and copy only those flags back to the SMARTS.
-        # Query predicates on the original atoms (wildcards, lists, negation,
-        # hydrogen counts, and so on) are therefore preserved.
-        probe = Chem.RWMol()
-
-        for atom in pattern.GetAtoms():
-            atomic_number = atom.GetAtomicNum() or 6
-            probe_atom = Chem.Atom(atomic_number)
-            probe_atom.SetFormalCharge(atom.GetFormalCharge())
-            probe.AddAtom(probe_atom)
-
-        for bond in pattern.GetBonds():
-            probe.AddBond(
-                bond.GetBeginAtomIdx(),
-                bond.GetEndAtomIdx(),
-                bond.GetBondType(),
-            )
-
-        probe = probe.GetMol()
-        Chem.SanitizeMol(probe)
-
-        for atom in probe.GetAtoms():
-            if atom.GetIsAromatic():
-                pattern.GetAtomWithIdx(atom.GetIdx()).SetIsAromatic(True)
-
-        for bond in probe.GetBonds():
-            if not bond.GetIsAromatic():
-                continue
-
-            pattern_bond = pattern.GetBondWithIdx(bond.GetIdx())
-            pattern_bond.SetIsAromatic(True)
-            pattern_bond.SetBondType(Chem.BondType.AROMATIC)
-
-        return Chem.MolToSmarts(pattern)
-    except Exception:
-        log.debug(
-            "CHEMSTRUCTURE could not aromatize SMARTS; using original query",
-            exc_info=True,
-        )
-        return query
-
-
 def _validate_structure_query_in_database(query, mode, metadata):
     if mode in ("smarts", "substructure"):
         return _validate_smarts_query_in_database(
@@ -905,19 +841,8 @@ def _run_structure_search_cartridge(query, mode, threshold, rows):
     rows = _validate_rows(rows)
 
     metadata = _inspect_rdkit_schema(mode)
-    database_query = (
-        _normalize_smarts_aromaticity(query)
-        if mode == "substructure"
-        else query
-    )
-    if database_query != query:
-        log.info(
-            "CHEMSTRUCTURE normalized substructure SMARTS original=%s normalized=%s",
-            query,
-            database_query,
-        )
     query_canonical_smiles = _validate_structure_query_in_database(
-        database_query,
+        query,
         mode,
         metadata,
     )
@@ -929,7 +854,7 @@ def _run_structure_search_cartridge(query, mode, threshold, rows):
 
     sql = _build_search_sql(mode, metadata, rows)
     params = {
-        "query": database_query,
+        "query": query,
         "threshold": threshold,
     }
 

@@ -159,28 +159,6 @@ def test_smarts_matching_uses_confirmed_smarts_function(monkeypatch):
     assert params["query"] == "[#6]"
 
 
-def test_substructure_normalizes_kekule_smarts_before_database_search(
-    monkeypatch,
-):
-    session = CapturingSession(rows=[])
-    monkeypatch.setattr(action.model, "Session", session)
-    monkeypatch.setattr(action, "_inspect_rdkit_schema", lambda mode: metadata())
-    monkeypatch.setattr(
-        action,
-        "_normalize_smarts_aromaticity",
-        lambda query: "c1ccccc1-[F,Cl,Br,I,At]",
-    )
-
-    result = action.run_structure_search(
-        "[#6]1=[#6](-[F,Cl,Br,I,At])-[#6]=[#6]-[#6]=[#6]-1",
-        mode="substructure",
-        rows=10,
-    )
-
-    assert session.calls[-1][1]["query"] == "c1ccccc1-[F,Cl,Br,I,At]"
-    assert result["query"].startswith("[#6]1=")
-
-
 def test_similarity_threshold_filtering_ordering_and_fingerprint_join(
     monkeypatch,
 ):
