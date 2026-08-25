@@ -482,6 +482,34 @@ def _validate_smarts_query_in_database(query, smarts_function):
     return None
 
 
+def _normalize_smarts_aromaticity(query):
+    """Aromatize Kekule-style SMARTS while preserving query atom features.
+
+    Ketcher exports query atoms and atom lists correctly via ``getSmarts()``,
+    but a ring drawn with alternating bonds can be exported in Kekule form.
+    Stored RDKit molecules use aromatic atoms/bonds, so the unnormalized query
+    would miss aromatic targets.  RDKit sanitization restores aromatic bond
+    types and ``MolToSmarts`` retains wildcard/list query semantics.
+
+    PostgreSQL remains the authority for SMARTS validation.  If local RDKit
+    cannot normalize a valid cartridge-specific pattern, use it unchanged.
+    """
+    pattern = Chem.MolFromSmarts(query)
+
+    if pattern is None:
+        return query
+
+    try:
+        Chem.SanitizeMol(pattern)
+        return Chem.MolToSmarts(pattern)
+    except Exception:
+        log.debug(
+            "CHEMSTRUCTURE could not aromatize SMARTS; using original query",
+            exc_info=True,
+        )
+        return query
+
+
 def _validate_structure_query_in_database(query, mode, metadata):
     if mode in ("smarts", "substructure"):
         return _validate_smarts_query_in_database(
@@ -841,8 +869,13 @@ def _run_structure_search_cartridge(query, mode, threshold, rows):
     rows = _validate_rows(rows)
 
     metadata = _inspect_rdkit_schema(mode)
+    database_query = (
+        _normalize_smarts_aromaticity(query)
+        if mode == "substructure"
+        else query
+    )
     query_canonical_smiles = _validate_structure_query_in_database(
-        query,
+        database_query,
         mode,
         metadata,
     )
@@ -854,7 +887,7 @@ def _run_structure_search_cartridge(query, mode, threshold, rows):
 
     sql = _build_search_sql(mode, metadata, rows)
     params = {
-        "query": query,
+        "query": database_query,
         "threshold": threshold,
     }
 
@@ -944,7 +977,7 @@ def chemstructure_exact_search(context, data_dict):
 
 def chemstructure_render_query_image(context, data_dict):
     """
-    Render a query molecule image from SMILES.
+    Render a query molecule image from SMILES or SMARTS.
 
     Endpoint:
         /api/3/action/chemstructure_render_query_image
@@ -956,17 +989,22 @@ def chemstructure_render_query_image(context, data_dict):
     query = query or data_dict.get("structure_query")
     query = query or data_dict.get("query")
 
+    mode = data_dict.get("mode") or data_dict.get("structure_mode")
+
     if not query:
         raise toolkit.ValidationError({
             "smiles": ["SMILES query is required."]
         })
 
-    mol = Chem.MolFromSmiles(query)
+    is_smarts = mode in ("smarts", "substructure")
+    mol = Chem.MolFromSmarts(query) if is_smarts else Chem.MolFromSmiles(query)
 
     if mol is None:
         raise toolkit.ValidationError({
-            "smiles": [
-                "Invalid SMILES. RDKit could not parse the query molecule."
+            "query": [
+                "Invalid {}. RDKit could not parse the query structure.".format(
+                    "SMARTS" if is_smarts else "SMILES"
+                )
             ]
         })
 

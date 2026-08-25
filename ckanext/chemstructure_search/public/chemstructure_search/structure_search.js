@@ -826,7 +826,9 @@
         body: JSON.stringify({
           smiles: query,
           structure_query: query,
-          query: query
+          query: query,
+          mode: structureSearch.mode,
+          structure_mode: structureSearch.mode
         })
       });
 

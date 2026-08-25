@@ -141,17 +141,12 @@ def test_smarts_substructure_matching_uses_contains_operator(monkeypatch):
     )
 
     assert "m.molecule @> q.pattern" in sql
-    assert "LEFT JOIN rdk.fingerprints f" in sql
-    assert "ON f.molecule_id = m.molecule_id" in sql
-    assert '"public"."morganbv_fp"(molecule)' in sql
-    assert (
-        '"public"."tanimoto_sml"('
-        "\n                    q.query_fingerprint,"
-        "\n                    f.mfp2"
-    ) in sql
-    assert "ORDER BY similarity DESC NULLS LAST, name" in sql
+    assert "JOIN rdk.fingerprints" not in sql
+    assert '"public"."morganbv_fp"' not in sql
+    assert '"public"."tanimoto_sml"' not in sql
+    assert "ORDER BY name" in sql
     assert ">= :threshold" not in sql
-    assert result["results"][0]["similarity"] == 0.91
+    assert "similarity" not in result["results"][0]
     assert_common_package_mapping_sql(sql)
 
 
@@ -162,6 +157,28 @@ def test_smarts_matching_uses_confirmed_smarts_function(monkeypatch):
     assert "m.molecule @> q.pattern" in sql
     assert result["query_canonical_smiles"] is None
     assert params["query"] == "[#6]"
+
+
+def test_substructure_normalizes_kekule_smarts_before_database_search(
+    monkeypatch,
+):
+    session = CapturingSession(rows=[])
+    monkeypatch.setattr(action.model, "Session", session)
+    monkeypatch.setattr(action, "_inspect_rdkit_schema", lambda mode: metadata())
+    monkeypatch.setattr(
+        action,
+        "_normalize_smarts_aromaticity",
+        lambda query: "c1ccccc1-[F,Cl,Br,I,At]",
+    )
+
+    result = action.run_structure_search(
+        "[#6]1=[#6](-[F,Cl,Br,I,At])-[#6]=[#6]-[#6]=[#6]-1",
+        mode="substructure",
+        rows=10,
+    )
+
+    assert session.calls[-1][1]["query"] == "c1ccccc1-[F,Cl,Br,I,At]"
+    assert result["query"].startswith("[#6]1=")
 
 
 def test_similarity_threshold_filtering_ordering_and_fingerprint_join(
