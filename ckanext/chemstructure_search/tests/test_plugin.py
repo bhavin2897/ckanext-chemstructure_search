@@ -464,6 +464,36 @@ def test_before_search_generates_existing_solr_package_name_filter(
     assert params["rows"] == 2
 
 
+def test_before_search_removes_quoted_cxsmiles_from_solr_filter(monkeypatch):
+    app = Flask(__name__)
+    search_plugin = plugin.ChemstructureSearchPlugin()
+
+    monkeypatch.setattr(plugin, "run_structure_search", lambda **kwargs: {
+        "results": [{"name": "chlorobenzene"}],
+    })
+
+    cxsmiles = "C1C=CC=CC=1* |$;;;;;;X_p$|"
+    with app.test_request_context(
+        "/molecule?structure_query=C1C%3DCC%3DCC%3D1%2A+"
+        "%7C%24%3B%3B%3B%3B%3B%3BX_p%24%7C&structure_mode=similarity"
+    ):
+        params = search_plugin.before_search({
+            "fq": (
+                'structure_query:"{}" +dataset_type:molecule '
+                '-dataset_type:harvest'
+            ).format(cxsmiles),
+            "start": 0,
+            "rows": 20,
+            "sort": "score desc, metadata_modified desc",
+            "extras": {},
+        })
+
+    assert "structure_query:" not in params["fq"]
+    assert "X_p" not in params["fq"]
+    assert "+dataset_type:molecule" in params["fq"]
+    assert "{!terms f=name}chlorobenzene" in params["fq"]
+
+
 def test_molecule_text_search_defaults_to_relevance(monkeypatch):
     app = Flask(__name__)
     search_plugin = plugin.ChemstructureSearchPlugin()
