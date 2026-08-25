@@ -36,7 +36,6 @@ function element(value) {
 function createPage(options) {
   options = options || {};
   let smiles = options.smiles || "";
-  let smarts = options.smarts === undefined ? smiles : options.smarts;
   let clearStructure = options.clearStructure || function () {
     smiles = "";
     return Promise.resolve();
@@ -69,7 +68,7 @@ function createPage(options) {
       return smiles;
     },
     getSmarts: async function () {
-      return options.smarts === undefined ? smiles : smarts;
+      return options.smarts === undefined ? smiles : options.smarts;
     },
     getKet: async function () {
       return options.ket || "";
@@ -94,25 +93,7 @@ function createPage(options) {
     "chemstructure-threshold-value": thresholdValue,
     "chemstructure-threshold-wrapper": thresholdWrapper,
     "chemstructure-search-loading": overlay,
-    "ketcher-frame": {
-      contentWindow: {
-        ketcher: ketcher,
-        document: {
-          querySelector(selector) {
-            if (
-              selector !== '[data-testid="Aromatize button"]' ||
-              !options.aromatizedSmarts
-            ) {
-              return null;
-            }
-            return {
-              disabled: false,
-              click() { smarts = options.aromatizedSmarts; }
-            };
-          }
-        }
-      }
-    }
+    "ketcher-frame": { contentWindow: { ketcher: ketcher } }
   };
   const documentListeners = {};
   const document = {
@@ -269,23 +250,6 @@ test("substructure mode exports SMARTS from Ketcher", async function () {
   assert.equal(query.get("structure_query"), "c1ccccc1*");
   assert.equal(query.get("structure_mode"), "substructure");
   assert.match(page.storage.get("chemstructure_last_ket"), /"label":"A"/);
-});
-
-test("substructure search aromatizes before exporting SMARTS", async function () {
-  const page = createPage({
-    smarts: "[#6]1=[#6]-[#6]=[#6]-[#6]=[#6]-1",
-    aromatizedSmarts: "[#6]1:[#6]:[#6]:[#6]:[#6]:[#6]:1",
-    mode: "substructure"
-  });
-
-  click(page.search);
-  await new Promise(setImmediate);
-
-  const query = new URL(page.location.href, "http://example.test").searchParams;
-  assert.equal(
-    query.get("structure_query"),
-    "[#6]1:[#6]:[#6]:[#6]:[#6]:[#6]:1"
-  );
 });
 
 test("reopening Ketcher restores its KET document", async function () {

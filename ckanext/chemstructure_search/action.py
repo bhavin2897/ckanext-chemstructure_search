@@ -482,6 +482,71 @@ def _validate_smarts_query_in_database(query, smarts_function):
     return None
 
 
+def _generalize_kekule_ring_bonds(query):
+    """Make Ketcher Kekule ring SMARTS compatible with aromatic targets.
+
+    Ketcher cannot aromatize a query structure containing atom lists or other
+    query features.  It consequently exports rings using alternating single
+    and double bonds, while RDKit stores aromatic molecules with aromatic bond
+    types.  Generalize only alternating ring bonds to SMARTS ``~`` bonds.
+    Exocyclic bonds and all atom predicates remain unchanged.
+    """
+    pattern = Chem.MolFromSmarts(query)
+
+    if pattern is None:
+        return query
+
+    try:
+        Chem.GetSymmSSSR(pattern)
+        changed = False
+
+        for atom_ring in pattern.GetRingInfo().AtomRings():
+            ring_bonds = []
+
+            for index, atom_index in enumerate(atom_ring):
+                next_atom_index = atom_ring[(index + 1) % len(atom_ring)]
+                bond = pattern.GetBondBetweenAtoms(
+                    atom_index,
+                    next_atom_index,
+                )
+                if bond is None:
+                    ring_bonds = []
+                    break
+                ring_bonds.append(bond)
+
+            bond_types = [bond.GetBondType() for bond in ring_bonds]
+            if not ring_bonds or Chem.rdchem.BondType.DOUBLE not in bond_types:
+                continue
+            if any(
+                bond_type not in (
+                    Chem.rdchem.BondType.SINGLE,
+                    Chem.rdchem.BondType.DOUBLE,
+                )
+                for bond_type in bond_types
+            ):
+                continue
+
+            # Only generalize a genuinely alternating Kekule ring. This
+            # avoids weakening ordinary rings that merely contain a double
+            # bond, such as cyclohexene.
+            if any(
+                bond_types[index] == bond_types[(index + 1) % len(bond_types)]
+                for index in range(len(bond_types))
+            ):
+                continue
+
+            for bond in ring_bonds:
+                bond.SetBondType(Chem.rdchem.BondType.UNSPECIFIED)
+            changed = True
+
+        return Chem.MolToSmarts(pattern) if changed else query
+    except Exception:
+        log.exception(
+            "CHEMSTRUCTURE failed to generalize Ketcher ring SMARTS"
+        )
+        return query
+
+
 def _validate_structure_query_in_database(query, mode, metadata):
     if mode in ("smarts", "substructure"):
         return _validate_smarts_query_in_database(
@@ -841,8 +906,19 @@ def _run_structure_search_cartridge(query, mode, threshold, rows):
     rows = _validate_rows(rows)
 
     metadata = _inspect_rdkit_schema(mode)
+    database_query = (
+        _generalize_kekule_ring_bonds(query)
+        if mode == "substructure"
+        else query
+    )
+    if database_query != query:
+        log.info(
+            "CHEMSTRUCTURE generalized substructure SMARTS original=%s query=%s",
+            query,
+            database_query,
+        )
     query_canonical_smiles = _validate_structure_query_in_database(
-        query,
+        database_query,
         mode,
         metadata,
     )
@@ -854,7 +930,7 @@ def _run_structure_search_cartridge(query, mode, threshold, rows):
 
     sql = _build_search_sql(mode, metadata, rows)
     params = {
-        "query": query,
+        "query": database_query,
         "threshold": threshold,
     }
 

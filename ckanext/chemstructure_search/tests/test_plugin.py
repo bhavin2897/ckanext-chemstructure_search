@@ -159,6 +159,29 @@ def test_smarts_matching_uses_confirmed_smarts_function(monkeypatch):
     assert params["query"] == "[#6]"
 
 
+def test_substructure_uses_generalized_kekule_ring_query(monkeypatch):
+    session = CapturingSession(rows=[])
+    monkeypatch.setattr(action.model, "Session", session)
+    monkeypatch.setattr(action, "_inspect_rdkit_schema", lambda mode: metadata())
+    monkeypatch.setattr(
+        action,
+        "_generalize_kekule_ring_bonds",
+        lambda query: "[#6]1~[#6]~[#6]~[#6]~[#6]~[#6]~1",
+    )
+
+    result = action.run_structure_search(
+        "[#6]1=[#6]-[#6]=[#6]-[#6]=[#6]-1",
+        mode="substructure",
+        rows=10,
+    )
+
+    assert "qmol_from_smarts" in session.calls[-1][0]
+    assert session.calls[-1][1]["query"] == (
+        "[#6]1~[#6]~[#6]~[#6]~[#6]~[#6]~1"
+    )
+    assert result["query"].startswith("[#6]1=")
+
+
 def test_similarity_threshold_filtering_ordering_and_fingerprint_join(
     monkeypatch,
 ):
