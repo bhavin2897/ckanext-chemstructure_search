@@ -556,7 +556,19 @@
     updateThresholdVisibility();
     updateThresholdValueLabel();
 
-    restoreMoleculeInKetcher(lastSearch.ket || lastSearch.query);
+    /*
+     * Ketcher can round-trip CXSMILES pseudoatom labels (for example X_p)
+     * through setMolecule(), while restoring the corresponding KET document
+     * may leave the bond endpoint visible but drop its label. Substructure
+     * SMARTS query features are the opposite case: use lossless KET there.
+     */
+    var structureToRestore = lastSearch.query;
+
+    if (lastSearch.mode === "substructure" && lastSearch.ket) {
+      structureToRestore = lastSearch.ket;
+    }
+
+    restoreMoleculeInKetcher(structureToRestore);
   }
 
   async function runSearch(modeOverride) {
