@@ -1066,6 +1066,18 @@ def chemstructure_render_query_image(context, data_dict):
             ]
         })
 
+    if not is_smarts:
+        # Ketcher serializes pseudoatom labels in CXSMILES with an internal
+        # ``_p`` suffix (for example ``X_p``). RDKit preserves that suffix as
+        # the drawing label, but it is not part of the user-facing atom name.
+        for atom in mol.GetAtoms():
+            if not atom.HasProp("atomLabel"):
+                continue
+
+            atom_label = atom.GetProp("atomLabel")
+            if atom_label.endswith("_p"):
+                atom.SetProp("atomLabel", atom_label[:-2])
+
     try:
         image = Draw.MolToImage(mol, size=(260, 180))
         buffer = BytesIO()
