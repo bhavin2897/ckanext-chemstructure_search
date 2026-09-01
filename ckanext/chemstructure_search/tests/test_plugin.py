@@ -4,6 +4,7 @@ from flask import Flask
 import ckan.plugins.toolkit as toolkit
 
 import ckanext.chemstructure_search.action as action
+import ckanext.chemstructure_search.helpers as helpers
 import ckanext.chemstructure_search.plugin as plugin
 
 
@@ -46,6 +47,32 @@ class CapturingSession(object):
             raise RuntimeError("database exploded")
 
         return FakeResult(all_rows=self.rows)
+
+
+def test_ketcher_text_tool_is_hidden_by_default(monkeypatch):
+    monkeypatch.setattr(toolkit, "url_for_static", lambda path: path)
+    monkeypatch.delitem(
+        toolkit.config,
+        "ckanext.chemstructure_search.show_ketcher_text",
+        raising=False,
+    )
+
+    assert helpers.chemstructure_ketcher_url() == (
+        "/chemstructure_search/ketcher/index.html"
+    )
+
+
+def test_ketcher_text_tool_can_be_shown_per_deployment(monkeypatch):
+    monkeypatch.setattr(toolkit, "url_for_static", lambda path: path)
+    monkeypatch.setitem(
+        toolkit.config,
+        "ckanext.chemstructure_search.show_ketcher_text",
+        "true",
+    )
+
+    assert helpers.chemstructure_ketcher_url() == (
+        "/chemstructure_search/ketcher/index.html?showText=true"
+    )
 
 
 def metadata(

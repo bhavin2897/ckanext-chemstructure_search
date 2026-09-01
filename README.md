@@ -103,7 +103,12 @@ To install ckanext-chemstructure_search:
 
 ## Config settings
 
-None at present
+The Ketcher Text tool is hidden by default. To keep it visible on a test
+deployment, add this to that server's CKAN configuration:
+
+```ini
+ckanext.chemstructure_search.show_ketcher_text = true
+```
 
 
 ## Developer Notes

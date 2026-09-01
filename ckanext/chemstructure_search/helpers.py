@@ -5,6 +5,24 @@ from flask import request
 import ckan.plugins as plugins
 import ckan.plugins.toolkit as toolkit
 
+
+def chemstructure_ketcher_url():
+    """Return the embedded Ketcher URL with deployment-specific controls."""
+
+    ketcher_url = toolkit.url_for_static(
+        "/chemstructure_search/ketcher/index.html"
+    )
+    show_text = toolkit.asbool(toolkit.config.get(
+        "ckanext.chemstructure_search.show_ketcher_text",
+        False,
+    ))
+
+    if show_text:
+        return "{}?showText=true".format(ketcher_url)
+
+    return ketcher_url
+
+
 def chemstructure_search_params():
     """
     Return active structure-search URL parameters for templates.

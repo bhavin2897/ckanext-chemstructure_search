@@ -12,7 +12,10 @@ from ckanext.chemstructure_search.action import (
     chemstructure_render_query_image,
     run_structure_search,
 )
-from ckanext.chemstructure_search.helpers import chemstructure_search_params
+from ckanext.chemstructure_search.helpers import (
+    chemstructure_ketcher_url,
+    chemstructure_search_params,
+)
 from ckanext.chemstructure_search.indexing import add_molecule_synonyms
 from ckanext.chemstructure_search.sync import sync_molecule_package_safely
 from ckanext.chemstructure_search import cli
@@ -54,7 +57,8 @@ class ChemstructureSearchPlugin(plugins.SingletonPlugin):
 
     def get_helpers(self):
         return {
-            "chemstructure_search_params" : chemstructure_search_params
+            "chemstructure_ketcher_url": chemstructure_ketcher_url,
+            "chemstructure_search_params": chemstructure_search_params,
         }
 
     def before_index(self, pkg_dict):
