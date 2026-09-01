@@ -50,7 +50,6 @@ class CapturingSession(object):
 
 
 def test_ketcher_text_tool_is_hidden_by_default(monkeypatch):
-    monkeypatch.setattr(toolkit, "url_for_static", lambda path: path)
     monkeypatch.delitem(
         toolkit.config,
         "ckanext.chemstructure_search.show_ketcher_text",
@@ -63,7 +62,6 @@ def test_ketcher_text_tool_is_hidden_by_default(monkeypatch):
 
 
 def test_ketcher_text_tool_can_be_shown_per_deployment(monkeypatch):
-    monkeypatch.setattr(toolkit, "url_for_static", lambda path: path)
     monkeypatch.setitem(
         toolkit.config,
         "ckanext.chemstructure_search.show_ketcher_text",
