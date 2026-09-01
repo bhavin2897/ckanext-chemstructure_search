@@ -13,8 +13,8 @@ from ckanext.chemstructure_search.action import (
     run_structure_search,
 )
 from ckanext.chemstructure_search.helpers import (
-    chemstructure_ketcher_url,
     chemstructure_search_params,
+    chemstructure_show_ketcher_text,
 )
 from ckanext.chemstructure_search.indexing import add_molecule_synonyms
 from ckanext.chemstructure_search.sync import sync_molecule_package_safely
@@ -57,8 +57,8 @@ class ChemstructureSearchPlugin(plugins.SingletonPlugin):
 
     def get_helpers(self):
         return {
-            "chemstructure_ketcher_url": chemstructure_ketcher_url,
             "chemstructure_search_params": chemstructure_search_params,
+            "chemstructure_show_ketcher_text": chemstructure_show_ketcher_text,
         }
 
     def before_index(self, pkg_dict):

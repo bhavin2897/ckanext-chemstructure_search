@@ -49,28 +49,24 @@ class CapturingSession(object):
         return FakeResult(all_rows=self.rows)
 
 
-def test_ketcher_text_tool_is_hidden_by_default(monkeypatch):
+def test_ketcher_query_text_is_hidden_by_default(monkeypatch):
     monkeypatch.delitem(
         toolkit.config,
         "ckanext.chemstructure_search.show_ketcher_text",
         raising=False,
     )
 
-    assert helpers.chemstructure_ketcher_url() == (
-        "/chemstructure_search/ketcher/index.html"
-    )
+    assert helpers.chemstructure_show_ketcher_text() is False
 
 
-def test_ketcher_text_tool_can_be_shown_per_deployment(monkeypatch):
+def test_ketcher_query_text_can_be_shown_per_deployment(monkeypatch):
     monkeypatch.setitem(
         toolkit.config,
         "ckanext.chemstructure_search.show_ketcher_text",
         "true",
     )
 
-    assert helpers.chemstructure_ketcher_url() == (
-        "/chemstructure_search/ketcher/index.html?showText=true"
-    )
+    assert helpers.chemstructure_show_ketcher_text() is True
 
 
 def metadata(

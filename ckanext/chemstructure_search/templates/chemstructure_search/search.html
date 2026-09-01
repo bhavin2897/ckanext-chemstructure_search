@@ -35,12 +35,12 @@
 
           <iframe
             id="ketcher-frame"
-            src="{{ h.chemstructure_ketcher_url() }}"
+            src="{{ h.url_for_static('/chemstructure_search/ketcher/index.html') }}"
             class="chemstructure-ketcher-frame">
           </iframe>
         </div>
 
-        <div class="form-group">
+        <div class="form-group"{% if not h.chemstructure_show_ketcher_text() %} style="display: none;"{% endif %}>
           <label for="chemstructure-smiles">SMILES / SMARTS query</label>
           <input
             id="chemstructure-smiles"
