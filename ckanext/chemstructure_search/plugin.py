@@ -1,4 +1,5 @@
 import logging
+import re
 
 from flask import request
 
@@ -11,7 +12,10 @@ from ckanext.chemstructure_search.action import (
     chemstructure_render_query_image,
     run_structure_search,
 )
-from ckanext.chemstructure_search.helpers import chemstructure_search_params
+from ckanext.chemstructure_search.helpers import (
+    chemstructure_search_params,
+    chemstructure_show_ketcher_text,
+)
 from ckanext.chemstructure_search.indexing import add_molecule_synonyms
 from ckanext.chemstructure_search.sync import sync_molecule_package_safely
 from ckanext.chemstructure_search import cli
@@ -53,7 +57,8 @@ class ChemstructureSearchPlugin(plugins.SingletonPlugin):
 
     def get_helpers(self):
         return {
-            "chemstructure_search_params" : chemstructure_search_params
+            "chemstructure_search_params": chemstructure_search_params,
+            "chemstructure_show_ketcher_text": chemstructure_show_ketcher_text,
         }
 
     def before_index(self, pkg_dict):
@@ -389,21 +394,11 @@ class ChemstructureSearchPlugin(plugins.SingletonPlugin):
 
         def clean_one(value):
             value = str(value)
-
-            parts = value.split()
-            cleaned_parts = []
-
-            for part in parts:
-                if part.startswith("structure_query:"):
-                    continue
-                if part.startswith("structure_mode:"):
-                    continue
-                if part.startswith("threshold:"):
-                    continue
-
-                cleaned_parts.append(part)
-
-            return " ".join(cleaned_parts)
+            pseudo_filter = re.compile(
+                r'(?<!\S)(?:structure_query|structure_mode|threshold):'
+                r'(?:(?:"(?:\\.|[^"\\])*")|(?:[^\s]+))'
+            )
+            return " ".join(pseudo_filter.sub("", value).split())
 
         if isinstance(fq, list):
             cleaned = []

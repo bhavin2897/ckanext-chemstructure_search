@@ -267,6 +267,21 @@ test("reopening Ketcher restores its KET document", async function () {
   assert.equal(page.input.value, "[*]");
 });
 
+test("reopening similarity search restores CXSMILES instead of KET", async function () {
+  const cxsmiles = "C1C=CC=CC=1* |$;;;;;;X_p$|";
+  const page = createPage({
+    storedSmiles: cxsmiles,
+    storedKet: '{"root":{"nodes":[{"type":"atom","label":"A"}]}}',
+    mode: "similarity"
+  });
+
+  await page.intervals[1]();
+  await new Promise(setImmediate);
+
+  assert.equal(page.ketcher.loadedStructure, cxsmiles);
+  assert.equal(page.input.value, cxsmiles);
+});
+
 test("empty editor does not erase a text-entered SMILES/SMARTS query", async function () {
   const page = createPage({ input: "[#6]" });
   await pollKetcher(page);

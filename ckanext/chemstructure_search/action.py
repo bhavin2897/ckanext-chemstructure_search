@@ -424,7 +424,7 @@ def _inspect_rdkit_schema(mode):
 def _validate_smiles_query_in_database(query, functions):
     sql = text("""
         WITH query_molecule AS (
-            SELECT {mol_from_smiles}(:query) AS molecule
+            SELECT {mol_from_smiles}(CAST(:query AS cstring)) AS molecule
         )
         SELECT {mol_to_smiles}(molecule) AS query_canonical_smiles
         FROM query_molecule
@@ -456,7 +456,7 @@ def _validate_smiles_query_in_database(query, functions):
 def _validate_smarts_query_in_database(query, smarts_function):
     sql = text("""
         WITH query_pattern AS (
-            SELECT {smarts_function}(:query) AS pattern
+            SELECT {smarts_function}(CAST(:query AS cstring)) AS pattern
         )
         SELECT TRUE AS valid
         FROM query_pattern
@@ -480,6 +480,86 @@ def _validate_smarts_query_in_database(query, smarts_function):
         )
 
     return None
+
+
+def _generalize_kekule_ring_bonds(query):
+    """Make Ketcher Kekule ring SMARTS compatible with aromatic targets.
+
+    Ketcher cannot aromatize a query structure containing atom lists or other
+    query features.  It consequently exports rings using alternating single
+    and double bonds, while RDKit stores aromatic molecules with aromatic bond
+    types.  Generalize only alternating ring bonds to SMARTS ``~`` bonds.
+    Exocyclic bonds and all atom predicates remain unchanged.
+    """
+    pattern = Chem.MolFromSmarts(query)
+
+    if pattern is None:
+        return query
+
+    try:
+        Chem.GetSymmSSSR(pattern)
+        generalized_bond_indexes = set()
+
+        for atom_ring in pattern.GetRingInfo().AtomRings():
+            ring_bonds = []
+
+            for index, atom_index in enumerate(atom_ring):
+                next_atom_index = atom_ring[(index + 1) % len(atom_ring)]
+                bond = pattern.GetBondBetweenAtoms(
+                    atom_index,
+                    next_atom_index,
+                )
+                if bond is None:
+                    ring_bonds = []
+                    break
+                ring_bonds.append(bond)
+
+            bond_types = [bond.GetBondType() for bond in ring_bonds]
+            if not ring_bonds or Chem.rdchem.BondType.DOUBLE not in bond_types:
+                continue
+            if any(
+                bond_type not in (
+                    Chem.rdchem.BondType.SINGLE,
+                    Chem.rdchem.BondType.DOUBLE,
+                )
+                for bond_type in bond_types
+            ):
+                continue
+
+            # Only generalize a genuinely alternating Kekule ring. This
+            # avoids weakening ordinary rings that merely contain a double
+            # bond, such as cyclohexene.
+            if any(
+                bond_types[index] == bond_types[(index + 1) % len(bond_types)]
+                for index in range(len(bond_types))
+            ):
+                continue
+
+            generalized_bond_indexes.update(
+                bond.GetIdx() for bond in ring_bonds
+            )
+
+        if not generalized_bond_indexes:
+            return query
+
+        editable_pattern = Chem.RWMol(pattern)
+
+        for bond_index in generalized_bond_indexes:
+            # Changing BondType on a QueryBond changes only its display type;
+            # its original BondOrder query remains active. Replace the whole
+            # query bond so MolToSmarts emits and PostgreSQL evaluates ``~``.
+            editable_pattern.ReplaceBond(
+                bond_index,
+                Chem.BondFromSmarts("~"),
+                preserveProps=False,
+            )
+
+        return Chem.MolToSmarts(editable_pattern)
+    except Exception:
+        log.exception(
+            "CHEMSTRUCTURE failed to generalize Ketcher ring SMARTS"
+        )
+        return query
 
 
 def _validate_structure_query_in_database(query, mode, metadata):
@@ -544,7 +624,7 @@ def _build_exact_sql(metadata, rows):
 
     return text("""
         WITH query_molecule AS (
-            SELECT {mol_from_smiles}(:query) AS molecule
+            SELECT {mol_from_smiles}(CAST(:query AS cstring)) AS molecule
         ),
         hits AS (
             SELECT
@@ -596,7 +676,7 @@ def _build_substructure_sql(metadata, rows):
 
     return text("""
         WITH query_molecule AS (
-            SELECT {mol_from_smiles}(:query) AS molecule
+            SELECT {mol_from_smiles}(CAST(:query AS cstring)) AS molecule
         ),
         query_data AS (
             SELECT
@@ -661,7 +741,7 @@ def _build_smarts_sql(metadata, rows):
 
     return text("""
         WITH query_pattern AS (
-            SELECT {smarts_function}(:query) AS pattern
+            SELECT {smarts_function}(CAST(:query AS cstring)) AS pattern
         ),
         hits AS (
             SELECT
@@ -723,7 +803,7 @@ def _build_similarity_sql(metadata, rows):
 
     return text("""
         WITH query_molecule AS (
-            SELECT {mol_from_smiles}(:query) AS molecule
+            SELECT {mol_from_smiles}(CAST(:query AS cstring)) AS molecule
         ),
         query_fingerprint AS (
             SELECT
@@ -841,8 +921,19 @@ def _run_structure_search_cartridge(query, mode, threshold, rows):
     rows = _validate_rows(rows)
 
     metadata = _inspect_rdkit_schema(mode)
+    database_query = (
+        _generalize_kekule_ring_bonds(query)
+        if mode == "substructure"
+        else query
+    )
+    if database_query != query:
+        log.info(
+            "CHEMSTRUCTURE generalized substructure SMARTS original=%s query=%s",
+            query,
+            database_query,
+        )
     query_canonical_smiles = _validate_structure_query_in_database(
-        query,
+        database_query,
         mode,
         metadata,
     )
@@ -854,7 +945,7 @@ def _run_structure_search_cartridge(query, mode, threshold, rows):
 
     sql = _build_search_sql(mode, metadata, rows)
     params = {
-        "query": query,
+        "query": database_query,
         "threshold": threshold,
     }
 
@@ -944,7 +1035,7 @@ def chemstructure_exact_search(context, data_dict):
 
 def chemstructure_render_query_image(context, data_dict):
     """
-    Render a query molecule image from SMILES.
+    Render a query molecule image from SMILES or SMARTS.
 
     Endpoint:
         /api/3/action/chemstructure_render_query_image
@@ -956,19 +1047,36 @@ def chemstructure_render_query_image(context, data_dict):
     query = query or data_dict.get("structure_query")
     query = query or data_dict.get("query")
 
+    mode = data_dict.get("mode") or data_dict.get("structure_mode")
+
     if not query:
         raise toolkit.ValidationError({
             "smiles": ["SMILES query is required."]
         })
 
-    mol = Chem.MolFromSmiles(query)
+    is_smarts = mode in ("smarts", "substructure")
+    mol = Chem.MolFromSmarts(query) if is_smarts else Chem.MolFromSmiles(query)
 
     if mol is None:
         raise toolkit.ValidationError({
-            "smiles": [
-                "Invalid SMILES. RDKit could not parse the query molecule."
+            "query": [
+                "Invalid {}. RDKit could not parse the query structure.".format(
+                    "SMARTS" if is_smarts else "SMILES"
+                )
             ]
         })
+
+    if not is_smarts:
+        # Ketcher serializes pseudoatom labels in CXSMILES with an internal
+        # ``_p`` suffix (for example ``X_p``). RDKit preserves that suffix as
+        # the drawing label, but it is not part of the user-facing atom name.
+        for atom in mol.GetAtoms():
+            if not atom.HasProp("atomLabel"):
+                continue
+
+            atom_label = atom.GetProp("atomLabel")
+            if atom_label.endswith("_p"):
+                atom.SetProp("atomLabel", atom_label[:-2])
 
     try:
         image = Draw.MolToImage(mol, size=(260, 180))

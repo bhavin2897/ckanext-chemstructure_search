@@ -4,6 +4,7 @@ from flask import Flask
 import ckan.plugins.toolkit as toolkit
 
 import ckanext.chemstructure_search.action as action
+import ckanext.chemstructure_search.helpers as helpers
 import ckanext.chemstructure_search.plugin as plugin
 
 
@@ -46,6 +47,26 @@ class CapturingSession(object):
             raise RuntimeError("database exploded")
 
         return FakeResult(all_rows=self.rows)
+
+
+def test_ketcher_query_text_is_hidden_by_default(monkeypatch):
+    monkeypatch.delitem(
+        toolkit.config,
+        "ckanext.chemstructure_search.show_ketcher_text",
+        raising=False,
+    )
+
+    assert helpers.chemstructure_show_ketcher_text() is False
+
+
+def test_ketcher_query_text_can_be_shown_per_deployment(monkeypatch):
+    monkeypatch.setitem(
+        toolkit.config,
+        "ckanext.chemstructure_search.show_ketcher_text",
+        "true",
+    )
+
+    assert helpers.chemstructure_show_ketcher_text() is True
 
 
 def metadata(
@@ -141,27 +162,47 @@ def test_smarts_substructure_matching_uses_contains_operator(monkeypatch):
     )
 
     assert "m.molecule @> q.pattern" in sql
-    assert "LEFT JOIN rdk.fingerprints f" in sql
-    assert "ON f.molecule_id = m.molecule_id" in sql
-    assert '"public"."morganbv_fp"(molecule)' in sql
-    assert (
-        '"public"."tanimoto_sml"('
-        "\n                    q.query_fingerprint,"
-        "\n                    f.mfp2"
-    ) in sql
-    assert "ORDER BY similarity DESC NULLS LAST, name" in sql
+    assert "JOIN rdk.fingerprints" not in sql
+    assert '"public"."morganbv_fp"' not in sql
+    assert '"public"."tanimoto_sml"' not in sql
+    assert "ORDER BY name" in sql
     assert ">= :threshold" not in sql
-    assert result["results"][0]["similarity"] == 0.91
+    assert "similarity" not in result["results"][0]
     assert_common_package_mapping_sql(sql)
 
 
 def test_smarts_matching_uses_confirmed_smarts_function(monkeypatch):
     result, sql, params, _calls = run_with_captured_sql(monkeypatch, "smarts")
 
-    assert '"public"."qmol_from_smarts"(:query)' in sql
+    assert (
+        '"public"."qmol_from_smarts"(CAST(:query AS cstring))' in sql
+    )
     assert "m.molecule @> q.pattern" in sql
     assert result["query_canonical_smiles"] is None
     assert params["query"] == "[#6]"
+
+
+def test_substructure_uses_generalized_kekule_ring_query(monkeypatch):
+    session = CapturingSession(rows=[])
+    monkeypatch.setattr(action.model, "Session", session)
+    monkeypatch.setattr(action, "_inspect_rdkit_schema", lambda mode: metadata())
+    monkeypatch.setattr(
+        action,
+        "_generalize_kekule_ring_bonds",
+        lambda query: "[#6]1~[#6]~[#6]~[#6]~[#6]~[#6]~1",
+    )
+
+    result = action.run_structure_search(
+        "[#6]1=[#6]-[#6]=[#6]-[#6]=[#6]-1",
+        mode="substructure",
+        rows=10,
+    )
+
+    assert "qmol_from_smarts" in session.calls[-1][0]
+    assert session.calls[-1][1]["query"] == (
+        "[#6]1~[#6]~[#6]~[#6]~[#6]~[#6]~1"
+    )
+    assert result["query"].startswith("[#6]1=")
 
 
 def test_similarity_threshold_filtering_ordering_and_fingerprint_join(
@@ -442,6 +483,36 @@ def test_before_search_generates_existing_solr_package_name_filter(
     assert params["sort"] == plugin.CHEMICAL_RELEVANCE_SORT
     assert params["start"] == 0
     assert params["rows"] == 2
+
+
+def test_before_search_removes_quoted_cxsmiles_from_solr_filter(monkeypatch):
+    app = Flask(__name__)
+    search_plugin = plugin.ChemstructureSearchPlugin()
+
+    monkeypatch.setattr(plugin, "run_structure_search", lambda **kwargs: {
+        "results": [{"name": "chlorobenzene"}],
+    })
+
+    cxsmiles = "C1C=CC=CC=1* |$;;;;;;X_p$|"
+    with app.test_request_context(
+        "/molecule?structure_query=C1C%3DCC%3DCC%3D1%2A+"
+        "%7C%24%3B%3B%3B%3B%3B%3BX_p%24%7C&structure_mode=similarity"
+    ):
+        params = search_plugin.before_search({
+            "fq": (
+                'structure_query:"{}" +dataset_type:molecule '
+                '-dataset_type:harvest'
+            ).format(cxsmiles),
+            "start": 0,
+            "rows": 20,
+            "sort": "score desc, metadata_modified desc",
+            "extras": {},
+        })
+
+    assert "structure_query:" not in params["fq"]
+    assert "X_p" not in params["fq"]
+    assert "+dataset_type:molecule" in params["fq"]
+    assert "{!terms f=name}chlorobenzene" in params["fq"]
 
 
 def test_molecule_text_search_defaults_to_relevance(monkeypatch):

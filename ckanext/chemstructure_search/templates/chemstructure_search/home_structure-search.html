@@ -41,7 +41,7 @@
           class="chemstructure-modal-ketcher-frame">
         </iframe>
 
-        <div class="form-group chemstructure-modal-query">
+        <div class="form-group chemstructure-modal-query"{% if not h.chemstructure_show_ketcher_text() %} style="display: none;"{% endif %}>
           <label for="chemstructure-smiles">SMILES / SMARTS query</label>
           <input
             id="chemstructure-smiles"

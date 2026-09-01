@@ -5,6 +5,16 @@ from flask import request
 import ckan.plugins as plugins
 import ckan.plugins.toolkit as toolkit
 
+
+def chemstructure_show_ketcher_text():
+    """Return whether the synchronized query text field should be visible."""
+
+    return toolkit.asbool(toolkit.config.get(
+        "ckanext.chemstructure_search.show_ketcher_text",
+        False,
+    ))
+
+
 def chemstructure_search_params():
     """
     Return active structure-search URL parameters for templates.
