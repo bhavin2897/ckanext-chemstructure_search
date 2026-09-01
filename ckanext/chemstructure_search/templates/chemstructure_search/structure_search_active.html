@@ -1,7 +1,9 @@
 {% set structure = h.chemstructure_search_params() %}
 
 {% if structure %}
-  <div class="chemstructure-active-search">
+  <div
+    class="chemstructure-active-search"
+    data-filter-placeholder="{{ _('Filter molecules within results...') }}">
     <div
       class="chemstructure-active-search__content chemstructure-active-search__reopen"
       role="button"

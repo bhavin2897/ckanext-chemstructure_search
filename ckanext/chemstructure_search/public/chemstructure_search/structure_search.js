@@ -77,6 +77,22 @@
     }
   }
 
+  function setActiveSearchPlaceholder() {
+    var activeSearch = document.querySelector(".chemstructure-active-search");
+    var searchInput = document.getElementById("field-giant-search");
+
+    if (!activeSearch || !searchInput) {
+      return;
+    }
+
+    var placeholder = activeSearch.getAttribute("data-filter-placeholder");
+
+    if (placeholder) {
+      searchInput.setAttribute("placeholder", placeholder);
+      searchInput.setAttribute("aria-label", placeholder);
+    }
+  }
+
   function escapeHtml(value) {
     return String(value)
       .replace(/&/g, "&amp;")
@@ -892,6 +908,8 @@
       ".chemstructure-active-search__reopen"
     );
     var modal = document.getElementById("chemstructure-home-modal");
+
+    setActiveSearchPlaceholder();
 
     if (searchBtn) {
       searchBtn.addEventListener("click", function (event) {
